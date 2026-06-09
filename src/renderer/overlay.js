@@ -19,6 +19,7 @@ const badgeEl = document.getElementById('badge')
 const scoreEl = document.getElementById('score')
 const infoEl = document.getElementById('info')
 const videoBox = document.getElementById('video')
+const poster = document.getElementById('poster')
 const closeBtn = document.getElementById('close')
 
 let activeId = null
@@ -36,6 +37,9 @@ function applyVideoSettings(muted) {
     stream.video.muted = muted
     stream.video.controls = false
     stream.video.disableRemotePlayback = true
+    stream.video.addEventListener('playing', () => {
+      poster.style.opacity = '0'
+    }, { once: true })
   } else {
     requestAnimationFrame(() => applyVideoSettings(muted))
   }
@@ -76,6 +80,13 @@ function show(event) {
   clearTimeout(dismissTimer)
   activeId = event.id
   render(event)
+  if (event.poster) {
+    poster.style.opacity = '1'
+    poster.src = event.poster + (event.poster.includes('?') ? '&' : '?') + 't=' + Date.now()
+  } else {
+    poster.style.opacity = '0'
+    poster.removeAttribute('src')
+  }
   startStream(event.streamUrl, !event.sound)
   card.classList.remove('hidden')
   requestAnimationFrame(() => card.classList.add('show'))

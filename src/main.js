@@ -29,6 +29,10 @@ function streamUrl(camera) {
   return `${httpToWs(config.frigateUrl)}/live/webrtc/api/ws?src=${encodeURIComponent(camera)}`
 }
 
+function snapshotUrl(camera) {
+  return `${config.frigateUrl}/api/${encodeURIComponent(camera)}/latest.jpg`
+}
+
 function prettyName(camera) {
   if (config.cameras && config.cameras[camera]) return config.cameras[camera]
   return camera.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
@@ -88,6 +92,7 @@ function defaultPrefs() {
   return {
     cameras,
     sound: false,
+    snapshot: true,
     dismissSeconds: config.dismissSeconds != null ? config.dismissSeconds : 8
   }
 }
@@ -98,6 +103,7 @@ function loadPrefs() {
   prefs = {
     cameras: Object.assign({}, base.cameras, saved.cameras),
     sound: saved.sound != null ? saved.sound : base.sound,
+    snapshot: saved.snapshot != null ? saved.snapshot : base.snapshot,
     dismissSeconds: saved.dismissSeconds != null ? saved.dismissSeconds : base.dismissSeconds
   }
   Object.keys(prefs.cameras).forEach(c => knownCameras.add(c))
@@ -153,6 +159,15 @@ function buildMenu() {
         savePrefs()
       }
     },
+    {
+      label: 'Instant snapshot',
+      type: 'checkbox',
+      checked: prefs.snapshot,
+      click: (item) => {
+        prefs.snapshot = item.checked
+        savePrefs()
+      }
+    },
     { label: 'Dismiss after', submenu: dismissItems },
     { type: 'separator' },
     { label: 'Open config folder', click: () => shell.openPath(app.getPath('userData')) },
@@ -194,6 +209,7 @@ function handleEvent(data) {
     plate: after.recognized_license_plate || null,
     zones: after.entered_zones || [],
     streamUrl: streamUrl(after.camera),
+    poster: prefs.snapshot ? snapshotUrl(after.camera) : null,
     sound: prefs.sound,
     dismiss: prefs.dismissSeconds
   }
