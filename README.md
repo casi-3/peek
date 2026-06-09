@@ -38,6 +38,7 @@ Edit `config.json`:
 | `mqtt` | MQTT connection string, e.g. `mqtt://user:pass@host:1883` |
 | `frigateUrl` | Base URL of Frigate, e.g. `http://host:5000` |
 | `topicPrefix` | Frigate MQTT topic prefix (default `frigate`) |
+| `streamSuffix` | Appended to the camera name for the live stream, e.g. `_sub` to use the lighter substream (faster to start). Empty = main stream |
 | `cameras` | Map of camera name to display name. Leave `{}` to show all cameras |
 | `labels` | Only notify for these labels, e.g. `["person", "car"]`. Empty = all |
 | `minScore` | Ignore detections below this score (0–1) |
