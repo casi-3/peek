@@ -11,11 +11,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/github/v/release/casi-3/peek?color=3ddc84&label=release" alt="Release" /></a>
+  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/badge/release-v0.2.0-3ddc84" alt="Release" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555" alt="Platforms" />
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/casi-3/peek?color=blue" alt="License" /></a>
-  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/github/downloads/casi-3/peek/total?color=orange&label=downloads" alt="Downloads" /></a>
-  <img src="https://img.shields.io/github/stars/casi-3/peek?style=flat&color=yellow" alt="Stars" />
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
 </p>
 
 <p align="center">
