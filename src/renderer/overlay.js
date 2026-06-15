@@ -23,6 +23,7 @@ const poster = document.getElementById('poster')
 const closeBtn = document.getElementById('close')
 
 let activeId = null
+let activeStreamUrl = null
 let stream = null
 let dismissTimer = null
 
@@ -57,7 +58,7 @@ function startStream(url, muted) {
 
 function stopStream() {
   if (stream) {
-    stream.src = ''
+    stream.ondisconnect()
     stream.remove()
     stream = null
   }
@@ -80,6 +81,10 @@ function show(event) {
   clearTimeout(dismissTimer)
   activeId = event.id
   render(event)
+
+  const reuseStream = stream && event.streamUrl === activeStreamUrl && card.classList.contains('show')
+  if (reuseStream) return
+
   if (event.poster) {
     poster.style.opacity = '1'
     poster.src = event.poster + (event.poster.includes('?') ? '&' : '?') + 't=' + Date.now()
@@ -87,6 +92,7 @@ function show(event) {
     poster.style.opacity = '0'
     poster.removeAttribute('src')
   }
+  activeStreamUrl = event.streamUrl
   startStream(event.streamUrl, !event.sound)
   card.classList.remove('hidden')
   requestAnimationFrame(() => card.classList.add('show'))
@@ -95,6 +101,7 @@ function show(event) {
 function hide() {
   clearTimeout(dismissTimer)
   activeId = null
+  activeStreamUrl = null
   card.classList.remove('show')
   setTimeout(() => {
     stopStream()
