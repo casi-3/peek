@@ -92,6 +92,24 @@ npm run dist:win    # Windows installer + portable
 Tagging a release (`git tag v0.1.0 && git push --tags`) builds macOS and Windows
 on CI and attaches the binaries to a GitHub Release.
 
+## Troubleshooting
+
+### macOS: "Peek is damaged and can't be opened"
+
+Peek is signed with an ad-hoc signature but is **not** notarized by Apple (that
+requires a paid Apple Developer account). Builds from before this was fixed had
+a broken signature seal, which macOS reports as "damaged" on Apple Silicon once
+the download is quarantined.
+
+To open it, clear the quarantine flag after copying the app to `/Applications`:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Peek.app
+```
+
+Then launch normally. (On a properly ad-hoc-signed build you can also just
+right-click the app → **Open** → **Open** the first time.)
+
 ## Credits
 
 Live streaming uses the [go2rtc](https://github.com/AlexxIT/go2rtc) `video-rtc`
