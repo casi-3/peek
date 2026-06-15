@@ -33,6 +33,17 @@
           </select>
         </div>
       </div>
+      <div class="row split">
+        <div>
+          <label for="frigateUser">Frigate username</label>
+          <input id="frigateUser" type="text" placeholder="optional" autocomplete="off" />
+        </div>
+        <div>
+          <label for="frigatePass">Frigate password</label>
+          <input id="frigatePass" type="password" placeholder="optional" autocomplete="off" />
+        </div>
+      </div>
+      <p class="hint">Fill these only if your Frigate requires login (authenticated port, usually 8971). Leave empty for the open port 5000.</p>
     </section>
 
     <section>
@@ -57,6 +68,15 @@
           <input id="mqttPass" type="password" placeholder="optional" autocomplete="off" />
         </div>
       </div>
+    </section>
+
+    <section>
+      <h2>Updates</h2>
+      <label class="check">
+        <input id="autoUpdate" type="checkbox" />
+        <span class="check-text">Check for updates on launch and notify me</span>
+        <span class="info" tabindex="0">i<span class="tip">When enabled, Peek connects to GitHub over the internet to check for a new version. Leave this off to keep Peek fully local, with no external connection. You can still check manually anytime from the menu.</span></span>
+      </label>
     </section>
 
     <div id="status" class="hidden"></div>

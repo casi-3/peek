@@ -1,17 +1,24 @@
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session } = require('electron')
 const path = require('path')
+const { spawn } = require('child_process')
 const mqtt = require('mqtt')
 const { readConfig, saveConfig } = require('./config')
 const { readPrefs, writePrefs } = require('./prefs')
+const updater = require('./updater')
+const frigateAuth = require('./frigate-auth')
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
 let win = null
 let setupWin = null
+let updateWin = null
 let tray = null
 let config = null
 let prefs = null
+let pendingUpdate = null
 let appStarted = false
+let frigatePin = null
+let certProcSet = false
 const knownCameras = new Set()
 
 const DISMISS_OPTIONS = [
@@ -95,7 +102,10 @@ function defaultPrefs() {
     cameras,
     sound: false,
     snapshot: true,
-    dismissSeconds: config.dismissSeconds != null ? config.dismissSeconds : 8
+    dismissSeconds: config.dismissSeconds != null ? config.dismissSeconds : 8,
+    autoUpdate: false,
+    skipVersion: '',
+    lastNotify: { version: '', at: 0 }
   }
 }
 
@@ -106,7 +116,10 @@ function loadPrefs() {
     cameras: Object.assign({}, base.cameras, saved.cameras),
     sound: saved.sound != null ? saved.sound : base.sound,
     snapshot: saved.snapshot != null ? saved.snapshot : base.snapshot,
-    dismissSeconds: saved.dismissSeconds != null ? saved.dismissSeconds : base.dismissSeconds
+    dismissSeconds: saved.dismissSeconds != null ? saved.dismissSeconds : base.dismissSeconds,
+    autoUpdate: saved.autoUpdate != null ? saved.autoUpdate : base.autoUpdate,
+    skipVersion: saved.skipVersion != null ? saved.skipVersion : base.skipVersion,
+    lastNotify: saved.lastNotify != null ? saved.lastNotify : base.lastNotify
   }
   Object.keys(prefs.cameras).forEach(c => knownCameras.add(c))
 }
@@ -172,6 +185,16 @@ function buildMenu() {
     },
     { label: 'Dismiss after', submenu: dismissItems },
     { type: 'separator' },
+    { label: 'Check for updates…', click: () => checkForUpdates(true) },
+    {
+      label: 'Check on launch',
+      type: 'checkbox',
+      checked: prefs.autoUpdate,
+      click: (item) => {
+        prefs.autoUpdate = item.checked
+        savePrefs()
+      }
+    },
     { label: 'Settings…', click: () => openSetup() },
     { label: 'Open config folder', click: () => shell.openPath(app.getPath('userData')) },
     { label: 'Quit', role: 'quit' }
@@ -241,11 +264,47 @@ function startMqtt() {
   })
 }
 
+function applyCertPin() {
+  if (certProcSet) return
+  certProcSet = true
+  session.defaultSession.setCertificateVerifyProc((request, callback) => {
+    if (frigatePin && request.hostname === frigatePin.host) {
+      const sha = frigateAuth.pemToDerSha256(request.certificate && request.certificate.data)
+      if (sha && sha === frigatePin.certSha256) {
+        callback(0)
+        return
+      }
+    }
+    callback(-3)
+  })
+}
+
+async function initFrigateAuth() {
+  if (!config || !config.frigateUser || !frigateAuth.isHttps(config.frigateUrl)) return
+  try {
+    const { token, certSha256 } = await frigateAuth.login(config.frigateUrl, config.frigateUser, config.frigatePassword)
+    frigatePin = { host: new URL(config.frigateUrl).hostname, certSha256 }
+    applyCertPin()
+    await session.defaultSession.cookies.set({
+      url: config.frigateUrl,
+      name: 'frigate_token',
+      value: token,
+      path: '/',
+      secure: true,
+      httpOnly: true,
+      sameSite: 'no_restriction'
+    })
+  } catch (err) {
+    console.error('[frigate-auth] ' + err.message)
+  }
+}
+
 function startApp() {
   appStarted = true
   loadPrefs()
   createWindow()
   createTray()
+  initFrigateAuth()
   startMqtt()
 }
 
@@ -256,7 +315,7 @@ function openSetup() {
   }
   setupWin = new BrowserWindow({
     width: 460,
-    height: 600,
+    height: 748,
     resizable: false,
     fullscreenable: false,
     maximizable: false,
@@ -277,7 +336,7 @@ function openSetup() {
   })
 }
 
-function testConnection(cfg) {
+function testMqtt(cfg) {
   return new Promise((resolve) => {
     let done = false
     let client = null
@@ -303,6 +362,123 @@ function testConnection(cfg) {
   })
 }
 
+async function testConnection(cfg) {
+  const mqttRes = await testMqtt(cfg)
+  if (!mqttRes.ok) return mqttRes
+  if (cfg.frigateUser && frigateAuth.isHttps(cfg.frigateUrl)) {
+    try {
+      await frigateAuth.login(cfg.frigateUrl, cfg.frigateUser, cfg.frigatePassword)
+      return { ok: true, detail: 'MQTT broker and Frigate login OK.' }
+    } catch (err) {
+      return { ok: false, error: 'MQTT OK, but Frigate: ' + err.message }
+    }
+  }
+  return mqttRes
+}
+
+function openUpdateWindow() {
+  if (updateWin && !updateWin.isDestroyed()) {
+    updateWin.focus()
+    return
+  }
+  updateWin = new BrowserWindow({
+    width: 520,
+    height: 560,
+    resizable: false,
+    fullscreenable: false,
+    maximizable: false,
+    title: 'Update Peek',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'update-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  })
+  updateWin.loadFile(path.join(__dirname, 'update', 'update.html'))
+  updateWin.once('ready-to-show', () => updateWin.show())
+  updateWin.on('closed', () => { updateWin = null })
+}
+
+const NOTIFY_THROTTLE_MS = 24 * 60 * 60 * 1000
+
+async function checkForUpdates(manual) {
+  let latest
+  try {
+    latest = await updater.getLatest()
+  } catch (err) {
+    if (manual) {
+      dialog.showMessageBox({ type: 'error', title: 'Peek', message: 'Could not check for updates.', detail: err.message })
+    }
+    return
+  }
+  const current = app.getVersion()
+  if (!updater.isNewer(latest.version, current)) {
+    if (manual) {
+      dialog.showMessageBox({ type: 'info', title: 'Peek', message: 'You are up to date.', detail: 'Peek ' + current + ' is the latest version.' })
+    }
+    return
+  }
+  const asset = updater.pickAsset(latest.assets, process.platform)
+  pendingUpdate = {
+    current,
+    version: latest.version,
+    notes: latest.notes,
+    platform: process.platform,
+    asset: asset
+  }
+  if (manual) {
+    openUpdateWindow()
+    return
+  }
+  const now = Date.now()
+  if (!updater.shouldNotify(prefs, latest.version, now, NOTIFY_THROTTLE_MS)) {
+    return
+  }
+  prefs.lastNotify = { version: latest.version, at: now }
+  savePrefs()
+  notifyUpdate(latest.version)
+}
+
+function notifyUpdate(version) {
+  if (!Notification.isSupported()) {
+    openUpdateWindow()
+    return
+  }
+  const note = new Notification({
+    title: 'Update available',
+    body: 'Peek ' + version + ' is ready. Click to see what’s new.'
+  })
+  note.on('click', () => openUpdateWindow())
+  note.show()
+}
+
+function runInstaller(file, mode) {
+  if (process.platform === 'win32') {
+    const child = spawn(file, mode === 'silent' ? ['/S'] : [], { detached: true, stdio: 'ignore' })
+    child.unref()
+    setTimeout(() => app.quit(), 800)
+  } else {
+    shell.openPath(file)
+  }
+}
+
+async function installUpdate(mode) {
+  if (!pendingUpdate || !pendingUpdate.asset) {
+    return { error: 'No matching download for this platform.' }
+  }
+  const dest = path.join(app.getPath('temp'), pendingUpdate.asset.name)
+  try {
+    await updater.download(pendingUpdate.asset.url, dest, (p) => {
+      if (updateWin && !updateWin.isDestroyed()) updateWin.webContents.send('update-progress', p)
+    })
+  } catch (err) {
+    return { error: 'Download failed: ' + err.message }
+  }
+  runInstaller(dest, mode)
+  return { ok: true }
+}
+
 app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) app.dock.hide()
 
@@ -311,13 +487,23 @@ app.whenReady().then(() => {
   })
   ipcMain.handle('setup-load', () => readConfig())
   ipcMain.handle('setup-test', (e, cfg) => testConnection(cfg))
-  ipcMain.handle('setup-save', (e, cfg) => {
+  ipcMain.handle('setup-load-prefs', () => {
+    const p = prefs || readPrefs()
+    return { autoUpdate: !!(p && p.autoUpdate) }
+  })
+  ipcMain.handle('setup-save', (e, cfg, opts) => {
     saveConfig(cfg)
+    const wantUpdates = !!(opts && opts.autoUpdate)
     if (!appStarted) {
       config = cfg
       startApp()
+      prefs.autoUpdate = wantUpdates
+      savePrefs()
       if (setupWin && !setupWin.isDestroyed()) setupWin.close()
+      if (wantUpdates) setTimeout(() => checkForUpdates(false), 4000)
     } else {
+      prefs.autoUpdate = wantUpdates
+      savePrefs()
       app.relaunch()
       app.exit(0)
     }
@@ -327,9 +513,23 @@ app.whenReady().then(() => {
     if (setupWin && !setupWin.isDestroyed()) setupWin.close()
   })
 
+  ipcMain.handle('update-data', () => pendingUpdate)
+  ipcMain.handle('update-install', (e, mode) => installUpdate(mode))
+  ipcMain.on('update-later', () => {
+    if (updateWin && !updateWin.isDestroyed()) updateWin.close()
+  })
+  ipcMain.on('update-skip', () => {
+    if (pendingUpdate && pendingUpdate.version) {
+      prefs.skipVersion = pendingUpdate.version
+      savePrefs()
+    }
+    if (updateWin && !updateWin.isDestroyed()) updateWin.close()
+  })
+
   config = readConfig()
   if (config) {
     startApp()
+    if (prefs.autoUpdate) setTimeout(() => checkForUpdates(false), 4000)
   } else {
     openSetup()
   }

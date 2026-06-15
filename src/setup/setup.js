@@ -2,11 +2,14 @@ const el = (id) => document.getElementById(id)
 const fields = {
   frigateHost: el('frigateHost'),
   frigatePort: el('frigatePort'),
+  frigateUser: el('frigateUser'),
+  frigatePass: el('frigatePass'),
   corner: el('corner'),
   mqttHost: el('mqttHost'),
   mqttPort: el('mqttPort'),
   mqttUser: el('mqttUser'),
-  mqttPass: el('mqttPass')
+  mqttPass: el('mqttPass'),
+  autoUpdate: el('autoUpdate')
 }
 const statusEl = el('status')
 const testBtn = el('test')
@@ -48,9 +51,13 @@ function buildConfig() {
 
   const auth = user ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : ''
 
-  return Object.assign({}, base, {
+  const frigateUser = fields.frigateUser.value.trim()
+  const frigatePass = fields.frigatePass.value
+  const scheme = frigateUser ? 'https' : 'http'
+
+  const cfg = Object.assign({}, base, {
     mqtt: `mqtt://${auth}${mqttHost}:${mqttPort}`,
-    frigateUrl: `http://${frigateHost}:${frigatePort}`,
+    frigateUrl: `${scheme}://${frigateHost}:${frigatePort}`,
     topicPrefix: base.topicPrefix || 'frigate',
     cameras: base.cameras || {},
     labels: base.labels || [],
@@ -61,6 +68,16 @@ function buildConfig() {
     height: base.height || 300,
     dismissSeconds: base.dismissSeconds != null ? base.dismissSeconds : 8
   })
+
+  if (frigateUser) {
+    cfg.frigateUser = frigateUser
+    cfg.frigatePassword = frigatePass
+  } else {
+    delete cfg.frigateUser
+    delete cfg.frigatePassword
+  }
+
+  return cfg
 }
 
 function setStatus(kind, text) {
@@ -78,6 +95,8 @@ function valid() {
 }
 
 async function init() {
+  const p = await window.setup.loadPrefs()
+  fields.autoUpdate.checked = !!(p && p.autoUpdate)
   const existing = await window.setup.load()
   if (existing) {
     base = existing
@@ -85,6 +104,8 @@ async function init() {
     const m = parseMqtt(existing.mqtt || '')
     fields.frigateHost.value = f.host
     fields.frigatePort.value = f.port
+    fields.frigateUser.value = existing.frigateUser || ''
+    fields.frigatePass.value = existing.frigatePassword || ''
     fields.mqttHost.value = m.host
     fields.mqttPort.value = m.port
     fields.mqttUser.value = m.user
@@ -103,7 +124,7 @@ testBtn.addEventListener('click', async () => {
   const result = await window.setup.test(buildConfig())
   testBtn.disabled = false
   if (result.ok) {
-    setStatus('ok', 'Connected to the MQTT broker.')
+    setStatus('ok', result.detail || 'Connected to the MQTT broker.')
   } else {
     setStatus('err', result.error || 'Could not connect.')
   }
@@ -115,7 +136,7 @@ saveBtn.addEventListener('click', async () => {
     return
   }
   saveBtn.disabled = true
-  await window.setup.save(buildConfig())
+  await window.setup.save(buildConfig(), { autoUpdate: fields.autoUpdate.checked })
 })
 
 cancelBtn.addEventListener('click', () => window.setup.cancel())

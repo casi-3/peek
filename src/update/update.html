@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <link rel="stylesheet" href="update.css" />
+  <title>Update Peek</title>
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>Update available</h1>
+      <p id="sub">A new version of Peek is ready to install.</p>
+    </header>
+
+    <div id="versions">
+      <span class="pill current">Current <b id="cur">—</b></span>
+      <span class="arrow">→</span>
+      <span class="pill next">New <b id="next">—</b></span>
+    </div>
+
+    <h2>What's new</h2>
+    <div id="notes"></div>
+
+    <div id="progress" class="hidden">
+      <div id="bar"><div id="fill"></div></div>
+      <div id="pct">Downloading… 0%</div>
+    </div>
+
+    <div id="error" class="hidden"></div>
+
+    <footer>
+      <button id="later" class="ghost">Later</button>
+      <button id="skip" class="ghost">Skip this version</button>
+      <div class="spacer"></div>
+      <button id="silent" class="ghost">Silent install</button>
+      <button id="install" class="primary">Install</button>
+    </footer>
+  </div>
+  <script src="update.js"></script>
+</body>
+</html>
