@@ -18,6 +18,8 @@ let prefs = null
 let pendingUpdate = null
 let appStarted = false
 let frigatePin = null
+let frigateToken = null
+let cameraStreamMap = {}
 let certProcSet = false
 const knownCameras = new Set()
 
@@ -35,7 +37,28 @@ function httpToWs(url) {
 }
 
 function streamUrl(camera) {
-  return `${httpToWs(config.frigateUrl)}/live/webrtc/api/ws?src=${encodeURIComponent(camera)}`
+  const streamName = cameraStreamMap[camera] || camera
+  return `${httpToWs(config.frigateUrl)}/live/webrtc/api/ws?src=${encodeURIComponent(streamName)}`
+}
+
+function buildStreamMap(frigateConfig) {
+  const cameras = frigateConfig.cameras || {}
+  for (const [name, cam] of Object.entries(cameras)) {
+    const streams = cam && cam.live && cam.live.streams
+    if (streams && typeof streams === 'object') {
+      const first = Object.values(streams)[0]
+      if (first) cameraStreamMap[name] = first
+    }
+  }
+}
+
+async function fetchFrigateConfig(token) {
+  try {
+    const frigateConfig = await frigateAuth.fetchConfig(config.frigateUrl, token || null)
+    buildStreamMap(frigateConfig)
+  } catch (err) {
+    console.error('[peek] could not fetch Frigate config:', err.message)
+  }
 }
 
 function snapshotUrl(camera) {
@@ -283,6 +306,7 @@ async function initFrigateAuth() {
   if (!config || !config.frigateUser || !frigateAuth.isHttps(config.frigateUrl)) return
   try {
     const { token, certSha256 } = await frigateAuth.login(config.frigateUrl, config.frigateUser, config.frigatePassword)
+    frigateToken = token
     frigatePin = { host: new URL(config.frigateUrl).hostname, certSha256 }
     applyCertPin()
     await session.defaultSession.cookies.set({
@@ -304,7 +328,7 @@ function startApp() {
   loadPrefs()
   createWindow()
   createTray()
-  initFrigateAuth()
+  initFrigateAuth().then(() => fetchFrigateConfig(frigateToken))
   startMqtt()
 }
 

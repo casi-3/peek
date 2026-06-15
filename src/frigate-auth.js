@@ -73,4 +73,32 @@ function login(frigateUrl, user, password) {
   })
 }
 
-module.exports = { login, isHttps, pemToDerSha256 }
+function fetchConfig(frigateUrl, token) {
+  return new Promise((resolve, reject) => {
+    let u
+    try { u = new URL(frigateUrl) } catch (err) { reject(new Error('Invalid Frigate URL.')); return }
+    const secure = isHttps(frigateUrl)
+    const mod = secure ? https : require('http')
+    const options = {
+      hostname: u.hostname,
+      port: u.port || (secure ? 443 : 80),
+      path: '/api/config',
+      method: 'GET',
+      headers: token ? { Cookie: `frigate_token=${token}` } : {},
+      rejectUnauthorized: false
+    }
+    const req = mod.request(options, (res) => {
+      let data = ''
+      res.on('data', chunk => { data += chunk })
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)) }
+        catch (e) { reject(new Error('Invalid JSON from /api/config')) }
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(10000, () => req.destroy(new Error('Frigate config fetch timed out.')))
+    req.end()
+  })
+}
+
+module.exports = { login, fetchConfig, isHttps, pemToDerSha256 }
