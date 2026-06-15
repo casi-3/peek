@@ -16,6 +16,9 @@ const cancelBtn = el('cancel')
 let base = {}
 
 function parseMqtt(url) {
+  if (url) {
+    url = url.replace(/^(mqtt:\/\/)+/i, 'mqtt://');
+  }
   try {
     const u = new URL(url)
     return {
@@ -30,8 +33,19 @@ function parseMqtt(url) {
 }
 
 function parseFrigate(url) {
+  if (url) {
+    url = url.replace(/^(https?:\/\/)+/i, 'http://');
+  }
   try {
     const u = new URL(url)
+    // If the host parsed is still "http", it means the url was malformed (like http://http://...)
+    // Let's fallback or clean it up.
+    if (u.hostname === 'http' && u.pathname.startsWith('//')) {
+      const parts = u.pathname.substring(2).split('/');
+      const hostPart = parts[0];
+      const hostAndPort = hostPart.split(':');
+      return { host: hostAndPort[0], port: hostAndPort[1] || '5000' }
+    }
     return { host: u.hostname, port: u.port || '5000' }
   } catch (err) {
     return { host: '', port: '5000' }
@@ -39,9 +53,16 @@ function parseFrigate(url) {
 }
 
 function buildConfig() {
-  const frigateHost = fields.frigateHost.value.trim()
+  let frigateHost = fields.frigateHost.value.trim()
+  // Strip any leading protocol prefixes (http://, https://)
+  frigateHost = frigateHost.replace(/^https?:\/\//i, '')
+
   const frigatePort = fields.frigatePort.value.trim() || '5000'
-  const mqttHost = fields.mqttHost.value.trim() || frigateHost
+
+  let mqttHost = fields.mqttHost.value.trim() || frigateHost
+  // Strip leading mqtt:// protocol prefix if present
+  mqttHost = mqttHost.replace(/^mqtt:\/\//i, '')
+
   const mqttPort = fields.mqttPort.value.trim() || '1883'
   const user = fields.mqttUser.value.trim()
   const pass = fields.mqttPass.value

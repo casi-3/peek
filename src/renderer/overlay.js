@@ -1,4 +1,4 @@
-import { VideoRTC } from './vendor/video-rtc.js'
+// VideoRTC is loaded globally in index.html
 
 customElements.define('video-stream', VideoRTC)
 

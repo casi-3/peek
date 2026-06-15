@@ -14,7 +14,7 @@
  * - Customized built-in elements (extends HTMLVideoElement) because Safari
  * - Autoplay for WebRTC in Safari
  */
-export class VideoRTC extends HTMLElement {
+class VideoRTC extends HTMLElement {
     constructor() {
         super();
 
