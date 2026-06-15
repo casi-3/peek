@@ -14,6 +14,7 @@ const LABELS = {
 }
 
 const card = document.getElementById('card')
+const timerBar = document.getElementById('timer-bar')
 const camEl = document.getElementById('cam')
 const badgeEl = document.getElementById('badge')
 const scoreEl = document.getElementById('score')
@@ -25,6 +26,32 @@ const closeBtn = document.getElementById('close')
 let activeId = null
 let stream = null
 let dismissTimer = null
+let timerAnimation = null
+
+function showTimerBarActive() {
+  if (timerAnimation) { timerAnimation.cancel(); timerAnimation = null }
+  timerBar.style.transform = 'scaleX(1)'
+  timerBar.style.background = 'rgba(220, 60, 60, 0.85)'
+  timerBar.style.opacity = '1'
+}
+
+function startTimerBar(seconds) {
+  if (timerAnimation) timerAnimation.cancel()
+  timerBar.style.background = 'rgba(255, 255, 255, 0.75)'
+  timerBar.style.opacity = '1'
+  timerAnimation = timerBar.animate(
+    [{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }],
+    { duration: seconds * 1000, easing: 'linear', fill: 'forwards' }
+  )
+  timerAnimation.onfinish = () => { timerAnimation = null }
+}
+
+function resetTimerBar() {
+  if (timerAnimation) { timerAnimation.cancel(); timerAnimation = null }
+  timerBar.style.opacity = '0'
+  timerBar.style.transform = ''
+  timerBar.style.background = ''
+}
 
 function labelText(label) {
   const entry = LABELS[label]
@@ -87,6 +114,7 @@ function show(event) {
     poster.style.opacity = '0'
     poster.removeAttribute('src')
   }
+  showTimerBarActive()
   startStream(event.streamUrl, !event.sound)
   card.classList.remove('hidden')
   requestAnimationFrame(() => card.classList.add('show'))
@@ -94,6 +122,7 @@ function show(event) {
 
 function hide() {
   clearTimeout(dismissTimer)
+  resetTimerBar()
   activeId = null
   card.classList.remove('show')
   setTimeout(() => {
@@ -112,6 +141,7 @@ window.overlay.onEvent((event) => {
     render(event)
     if (event.dismiss > 0) {
       dismissTimer = setTimeout(hide, event.dismiss * 1000)
+      startTimerBar(event.dismiss)
     }
   }
 })
