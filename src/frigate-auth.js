@@ -1,4 +1,5 @@
 const https = require('https')
+const http = require('http')
 const crypto = require('crypto')
 
 function isHttps(url) {
@@ -73,4 +74,39 @@ function login(frigateUrl, user, password) {
   })
 }
 
-module.exports = { login, isHttps, pemToDerSha256 }
+function fetchConfig(frigateUrl, token) {
+  return new Promise((resolve, reject) => {
+    let u
+    try {
+      u = new URL(frigateUrl)
+    } catch (err) {
+      reject(new Error('Invalid Frigate URL.'))
+      return
+    }
+    const secure = isHttps(frigateUrl)
+    const mod = secure ? https : http
+    const req = mod.request({
+      hostname: u.hostname,
+      port: u.port || (secure ? 443 : 80),
+      path: '/api/config',
+      method: 'GET',
+      headers: token ? { Cookie: 'frigate_token=' + token } : {},
+      rejectUnauthorized: false
+    }, (res) => {
+      const chunks = []
+      res.on('data', (c) => chunks.push(c))
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString()))
+        } catch (e) {
+          reject(new Error('Invalid response from /api/config.'))
+        }
+      })
+    })
+    req.on('error', reject)
+    req.setTimeout(10000, () => req.destroy(new Error('Frigate config fetch timed out.')))
+    req.end()
+  })
+}
+
+module.exports = { login, fetchConfig, isHttps, pemToDerSha256 }

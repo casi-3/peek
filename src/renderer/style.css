@@ -35,6 +35,19 @@ body {
   display: none;
 }
 
+#timer-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  transform-origin: left;
+  transform: scaleX(0);
+  z-index: 5;
+  opacity: 0;
+  transition: background 0.4s ease;
+}
+
 #video {
   position: absolute;
   inset: 0;

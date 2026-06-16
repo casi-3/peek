@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/badge/release-v0.3.1-3ddc84" alt="Release" /></a>
+  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/badge/release-v0.4.0-3ddc84" alt="Release" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555" alt="Platforms" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
 </p>
@@ -122,6 +122,13 @@ Applications:
 ```bash
 xattr -dr com.apple.quarantine /Applications/Peek.app
 ```
+
+### macOS: the menu bar icon is hidden behind the notch
+
+On Macs with a notch, macOS can place the menu bar icon behind it once the bar
+is full, leaving Settings out of reach. Launch Peek again from Spotlight or the
+Applications folder to reopen Settings, or enable "Keep an icon in the Dock" in
+Settings for a permanent entry point.
 
 ## Credits
 

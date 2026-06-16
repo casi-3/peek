@@ -9,7 +9,8 @@ const fields = {
   mqttPort: el('mqttPort'),
   mqttUser: el('mqttUser'),
   mqttPass: el('mqttPass'),
-  autoUpdate: el('autoUpdate')
+  autoUpdate: el('autoUpdate'),
+  showDock: el('showDock')
 }
 const statusEl = el('status')
 const testBtn = el('test')
@@ -42,9 +43,9 @@ function parseFrigate(url) {
 }
 
 function buildConfig() {
-  const frigateHost = fields.frigateHost.value.trim()
+  const frigateHost = fields.frigateHost.value.trim().replace(/^\w+:\/\//, '')
   const frigatePort = fields.frigatePort.value.trim() || '5000'
-  const mqttHost = fields.mqttHost.value.trim() || frigateHost
+  const mqttHost = (fields.mqttHost.value.trim() || frigateHost).replace(/^\w+:\/\//, '')
   const mqttPort = fields.mqttPort.value.trim() || '1883'
   const user = fields.mqttUser.value.trim()
   const pass = fields.mqttPass.value
@@ -97,6 +98,12 @@ function valid() {
 async function init() {
   const p = await window.setup.loadPrefs()
   fields.autoUpdate.checked = !!(p && p.autoUpdate)
+  fields.showDock.checked = !!(p && p.showDock)
+  if (p && p.platform !== 'darwin') {
+    const dockRow = el('dockRow')
+    if (dockRow) dockRow.style.display = 'none'
+  }
+  if (p && p.started) saveBtn.textContent = 'Save'
   const existing = await window.setup.load()
   if (existing) {
     base = existing
@@ -136,7 +143,7 @@ saveBtn.addEventListener('click', async () => {
     return
   }
   saveBtn.disabled = true
-  await window.setup.save(buildConfig(), { autoUpdate: fields.autoUpdate.checked })
+  await window.setup.save(buildConfig(), { autoUpdate: fields.autoUpdate.checked, showDock: fields.showDock.checked })
 })
 
 cancelBtn.addEventListener('click', () => window.setup.cancel())

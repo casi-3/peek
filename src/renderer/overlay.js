@@ -14,6 +14,7 @@ const LABELS = {
 }
 
 const card = document.getElementById('card')
+const timerBar = document.getElementById('timer-bar')
 const camEl = document.getElementById('cam')
 const badgeEl = document.getElementById('badge')
 const scoreEl = document.getElementById('score')
@@ -23,8 +24,35 @@ const poster = document.getElementById('poster')
 const closeBtn = document.getElementById('close')
 
 let activeId = null
+let activeStreamUrl = null
 let stream = null
 let dismissTimer = null
+let timerAnimation = null
+
+function showTimerBarActive() {
+  if (timerAnimation) { timerAnimation.cancel(); timerAnimation = null }
+  timerBar.style.transform = 'scaleX(1)'
+  timerBar.style.background = 'rgba(220, 60, 60, 0.85)'
+  timerBar.style.opacity = '1'
+}
+
+function startTimerBar(seconds) {
+  if (timerAnimation) timerAnimation.cancel()
+  timerBar.style.background = 'rgba(255, 255, 255, 0.75)'
+  timerBar.style.opacity = '1'
+  timerAnimation = timerBar.animate(
+    [{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }],
+    { duration: seconds * 1000, easing: 'linear', fill: 'forwards' }
+  )
+  timerAnimation.onfinish = () => { timerAnimation = null }
+}
+
+function resetTimerBar() {
+  if (timerAnimation) { timerAnimation.cancel(); timerAnimation = null }
+  timerBar.style.opacity = '0'
+  timerBar.style.transform = ''
+  timerBar.style.background = ''
+}
 
 function labelText(label) {
   const entry = LABELS[label]
@@ -57,7 +85,7 @@ function startStream(url, muted) {
 
 function stopStream() {
   if (stream) {
-    stream.src = ''
+    stream.ondisconnect()
     stream.remove()
     stream = null
   }
@@ -80,6 +108,8 @@ function show(event) {
   clearTimeout(dismissTimer)
   activeId = event.id
   render(event)
+  showTimerBarActive()
+  if (stream && event.streamUrl === activeStreamUrl && card.classList.contains('show')) return
   if (event.poster) {
     poster.style.opacity = '1'
     poster.src = event.poster + (event.poster.includes('?') ? '&' : '?') + 't=' + Date.now()
@@ -87,6 +117,7 @@ function show(event) {
     poster.style.opacity = '0'
     poster.removeAttribute('src')
   }
+  activeStreamUrl = event.streamUrl
   startStream(event.streamUrl, !event.sound)
   card.classList.remove('hidden')
   requestAnimationFrame(() => card.classList.add('show'))
@@ -94,7 +125,9 @@ function show(event) {
 
 function hide() {
   clearTimeout(dismissTimer)
+  resetTimerBar()
   activeId = null
+  activeStreamUrl = null
   card.classList.remove('show')
   setTimeout(() => {
     stopStream()
@@ -112,6 +145,7 @@ window.overlay.onEvent((event) => {
     render(event)
     if (event.dismiss > 0) {
       dismissTimer = setTimeout(hide, event.dismiss * 1000)
+      startTimerBar(event.dismiss)
     }
   }
 })

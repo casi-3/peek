@@ -9,6 +9,14 @@ const frigateAuth = require('./frigate-auth')
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
+const gotInstanceLock = app.requestSingleInstanceLock()
+if (!gotInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => openSetup())
+  if (process.platform === 'darwin') app.on('activate', () => openSetup())
+}
+
 let win = null
 let setupWin = null
 let updateWin = null
@@ -18,6 +26,8 @@ let prefs = null
 let pendingUpdate = null
 let appStarted = false
 let frigatePin = null
+let frigateToken = null
+let cameraStreamMap = {}
 let certProcSet = false
 const knownCameras = new Set()
 
@@ -35,7 +45,28 @@ function httpToWs(url) {
 }
 
 function streamUrl(camera) {
-  return `${httpToWs(config.frigateUrl)}/live/webrtc/api/ws?src=${encodeURIComponent(camera)}`
+  const streamName = cameraStreamMap[camera] || camera
+  return `${httpToWs(config.frigateUrl)}/live/webrtc/api/ws?src=${encodeURIComponent(streamName)}`
+}
+
+function buildStreamMap(frigateConfig) {
+  const cameras = (frigateConfig && frigateConfig.cameras) || {}
+  for (const [name, cam] of Object.entries(cameras)) {
+    const streams = cam && cam.live && cam.live.streams
+    if (streams && typeof streams === 'object') {
+      const first = Object.values(streams)[0]
+      if (first) cameraStreamMap[name] = first
+    }
+  }
+}
+
+async function fetchFrigateConfig(token) {
+  try {
+    const frigateConfig = await frigateAuth.fetchConfig(config.frigateUrl, token || null)
+    buildStreamMap(frigateConfig)
+  } catch (err) {
+    console.error('[peek] could not fetch Frigate config: ' + err.message)
+  }
 }
 
 function snapshotUrl(camera) {
@@ -104,6 +135,7 @@ function defaultPrefs() {
     snapshot: true,
     dismissSeconds: config.dismissSeconds != null ? config.dismissSeconds : 8,
     autoUpdate: false,
+    showDock: false,
     skipVersion: '',
     lastNotify: { version: '', at: 0 }
   }
@@ -118,6 +150,7 @@ function loadPrefs() {
     snapshot: saved.snapshot != null ? saved.snapshot : base.snapshot,
     dismissSeconds: saved.dismissSeconds != null ? saved.dismissSeconds : base.dismissSeconds,
     autoUpdate: saved.autoUpdate != null ? saved.autoUpdate : base.autoUpdate,
+    showDock: saved.showDock != null ? saved.showDock : base.showDock,
     skipVersion: saved.skipVersion != null ? saved.skipVersion : base.skipVersion,
     lastNotify: saved.lastNotify != null ? saved.lastNotify : base.lastNotify
   }
@@ -283,6 +316,7 @@ async function initFrigateAuth() {
   if (!config || !config.frigateUser || !frigateAuth.isHttps(config.frigateUrl)) return
   try {
     const { token, certSha256 } = await frigateAuth.login(config.frigateUrl, config.frigateUser, config.frigatePassword)
+    frigateToken = token
     frigatePin = { host: new URL(config.frigateUrl).hostname, certSha256 }
     applyCertPin()
     await session.defaultSession.cookies.set({
@@ -304,7 +338,7 @@ function startApp() {
   loadPrefs()
   createWindow()
   createTray()
-  initFrigateAuth()
+  initFrigateAuth().then(() => fetchFrigateConfig(frigateToken))
   startMqtt()
 }
 
@@ -480,7 +514,8 @@ async function installUpdate(mode) {
 }
 
 app.whenReady().then(() => {
-  if (process.platform === 'darwin' && app.dock) app.dock.hide()
+  if (!gotInstanceLock) return
+  if (process.platform === 'darwin' && app.dock && !readPrefs().showDock) app.dock.hide()
 
   ipcMain.on('overlay-hide', () => {
     if (win && !win.isDestroyed()) win.hide()
@@ -489,23 +524,46 @@ app.whenReady().then(() => {
   ipcMain.handle('setup-test', (e, cfg) => testConnection(cfg))
   ipcMain.handle('setup-load-prefs', () => {
     const p = prefs || readPrefs()
-    return { autoUpdate: !!(p && p.autoUpdate) }
+    return { autoUpdate: !!(p && p.autoUpdate), showDock: !!(p && p.showDock), platform: process.platform, started: appStarted }
   })
   ipcMain.handle('setup-save', (e, cfg, opts) => {
     saveConfig(cfg)
     const wantUpdates = !!(opts && opts.autoUpdate)
+    const wantDock = !!(opts && opts.showDock)
     if (!appStarted) {
       config = cfg
       startApp()
       prefs.autoUpdate = wantUpdates
+      prefs.showDock = wantDock
       savePrefs()
+      if (process.platform === 'darwin' && app.dock) {
+        if (wantDock) app.dock.show()
+        else app.dock.hide()
+      }
       if (setupWin && !setupWin.isDestroyed()) setupWin.close()
       if (wantUpdates) setTimeout(() => checkForUpdates(false), 4000)
     } else {
+      const needsReconnect = !config ||
+        config.frigateUrl !== cfg.frigateUrl ||
+        config.mqtt !== cfg.mqtt ||
+        config.frigateUser !== cfg.frigateUser ||
+        config.frigatePassword !== cfg.frigatePassword
+      const wasUpdates = !!prefs.autoUpdate
       prefs.autoUpdate = wantUpdates
+      prefs.showDock = wantDock
       savePrefs()
-      app.relaunch()
-      app.exit(0)
+      if (needsReconnect) {
+        app.relaunch()
+        app.exit(0)
+        return { ok: true }
+      }
+      config = cfg
+      if (process.platform === 'darwin' && app.dock) {
+        if (wantDock) app.dock.show()
+        else app.dock.hide()
+      }
+      if (setupWin && !setupWin.isDestroyed()) setupWin.close()
+      if (wantUpdates && !wasUpdates) setTimeout(() => checkForUpdates(false), 1000)
     }
     return { ok: true }
   })
