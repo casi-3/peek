@@ -25,6 +25,7 @@ const closeBtn = document.getElementById('close')
 
 let activeId = null
 let activeStreamUrl = null
+let activeClickUrl = null
 let stream = null
 let dismissTimer = null
 let timerAnimation = null
@@ -107,6 +108,8 @@ function render(event) {
 function show(event) {
   clearTimeout(dismissTimer)
   activeId = event.id
+  activeClickUrl = event.clickUrl || null
+  card.classList.toggle('clickable', !!activeClickUrl)
   render(event)
   showTimerBarActive()
   if (stream && event.streamUrl === activeStreamUrl && card.classList.contains('show')) return
@@ -128,6 +131,8 @@ function hide() {
   resetTimerBar()
   activeId = null
   activeStreamUrl = null
+  activeClickUrl = null
+  card.classList.remove('clickable')
   card.classList.remove('show')
   setTimeout(() => {
     stopStream()
@@ -150,4 +155,11 @@ window.overlay.onEvent((event) => {
   }
 })
 
-closeBtn.addEventListener('click', hide)
+closeBtn.addEventListener('click', (e) => {
+  e.stopPropagation()
+  hide()
+})
+
+card.addEventListener('click', () => {
+  if (activeClickUrl) window.overlay.openUrl(activeClickUrl)
+})

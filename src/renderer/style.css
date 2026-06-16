@@ -26,6 +26,10 @@ body {
   transition: opacity 0.35s ease, transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
+#card.clickable {
+  cursor: pointer;
+}
+
 #card.show {
   opacity: 1;
   transform: translateX(0) scale(1);

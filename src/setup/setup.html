@@ -71,11 +71,28 @@
     </section>
 
     <section>
+      <h2>Notifications</h2>
+      <div class="row">
+        <label for="clickAction">Click notification to</label>
+        <select id="clickAction">
+          <option value="event">Open event details</option>
+          <option value="live">Open live stream</option>
+          <option value="disabled">Do nothing</option>
+        </select>
+      </div>
+    </section>
+
+    <section>
       <h2>Updates</h2>
       <label class="check">
         <input id="autoUpdate" type="checkbox" />
         <span class="check-text">Check for updates on launch and notify me</span>
         <span class="info" tabindex="0">i<span class="tip">When enabled, Peek connects to GitHub over the internet to check for a new version. Leave this off to keep Peek fully local, with no external connection. You can still check manually anytime from the menu.</span></span>
+      </label>
+      <label class="check" id="startupRow">
+        <input id="openAtLogin" type="checkbox" />
+        <span class="check-text">Open on startup</span>
+        <span class="info" tabindex="0">i<span class="tip">Start Peek automatically when your computer starts. Peek runs in the background and only shows the overlay when Frigate detects something.</span></span>
       </label>
       <label class="check" id="dockRow">
         <input id="showDock" type="checkbox" />

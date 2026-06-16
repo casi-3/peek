@@ -10,7 +10,9 @@ const fields = {
   mqttUser: el('mqttUser'),
   mqttPass: el('mqttPass'),
   autoUpdate: el('autoUpdate'),
-  showDock: el('showDock')
+  openAtLogin: el('openAtLogin'),
+  showDock: el('showDock'),
+  clickAction: el('clickAction')
 }
 const statusEl = el('status')
 const testBtn = el('test')
@@ -98,7 +100,13 @@ function valid() {
 async function init() {
   const p = await window.setup.loadPrefs()
   fields.autoUpdate.checked = !!(p && p.autoUpdate)
+  fields.openAtLogin.checked = !!(p && p.openAtLogin)
   fields.showDock.checked = !!(p && p.showDock)
+  fields.clickAction.value = (p && p.clickAction) || 'event'
+  if (p && p.platform !== 'darwin' && p.platform !== 'win32') {
+    const startupRow = el('startupRow')
+    if (startupRow) startupRow.style.display = 'none'
+  }
   if (p && p.platform !== 'darwin') {
     const dockRow = el('dockRow')
     if (dockRow) dockRow.style.display = 'none'
@@ -143,7 +151,12 @@ saveBtn.addEventListener('click', async () => {
     return
   }
   saveBtn.disabled = true
-  await window.setup.save(buildConfig(), { autoUpdate: fields.autoUpdate.checked, showDock: fields.showDock.checked })
+  await window.setup.save(buildConfig(), {
+    autoUpdate: fields.autoUpdate.checked,
+    openAtLogin: fields.openAtLogin.checked,
+    showDock: fields.showDock.checked,
+    clickAction: fields.clickAction.value
+  })
 })
 
 cancelBtn.addEventListener('click', () => window.setup.cancel())
