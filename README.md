@@ -112,6 +112,14 @@ on CI and attaches the binaries to a GitHub Release.
 
 ## Troubleshooting
 
+### macOS: the menu bar icon is missing
+
+On Macs with a notch, macOS hides newly added menu bar icons behind the notch when
+the menu bar is full, which previously left Peek unreachable. Peek now also keeps a
+Dock icon on macOS — click it (or re-launch Peek) to open **Settings**, and use the
+standard app menu to quit. Freeing up menu bar space (or a manager like
+[Ice](https://github.com/jordanbaird/Ice)) will bring the menu bar icon back.
+
 ### macOS: "Peek is damaged and can't be opened"
 
 Builds before 0.3.1 had a broken signature seal that macOS reports as "damaged"

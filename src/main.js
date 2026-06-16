@@ -480,7 +480,9 @@ async function installUpdate(mode) {
 }
 
 app.whenReady().then(() => {
-  if (process.platform === 'darwin' && app.dock) app.dock.hide()
+  // Keep the macOS Dock icon visible. The tray icon is the only entry point to
+  // Settings/Quit, and on Macs with a full menu bar macOS parks new status items
+  // behind the notch, leaving the app unreachable. A Dock icon guarantees access.
 
   ipcMain.on('overlay-hide', () => {
     if (win && !win.isDestroyed()) win.hide()
@@ -536,3 +538,9 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {})
+
+// Clicking the Dock icon (or re-launching) opens Settings, so the app is reachable
+// even when the tray icon is hidden behind the macOS notch.
+app.on('activate', () => {
+  if (appStarted) openSetup()
+})
