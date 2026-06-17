@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session, powerMonitor } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { spawn, execFileSync } = require('child_process')
@@ -30,6 +30,7 @@ let frigatePin = null
 let frigateToken = null
 let cameraStreamMap = {}
 let certProcSet = false
+let mqttClient = null
 const knownCameras = new Set()
 
 const DISMISS_OPTIONS = [
@@ -297,9 +298,9 @@ function handleEvent(data) {
 
 function startMqtt() {
   const prefix = config.topicPrefix || 'frigate'
-  const client = mqtt.connect(config.mqtt, { reconnectPeriod: 3000 })
-  client.on('connect', () => client.subscribe(`${prefix}/events`))
-  client.on('message', (topic, payload) => {
+  mqttClient = mqtt.connect(config.mqtt, { reconnectPeriod: 3000 })
+  mqttClient.on('connect', () => mqttClient.subscribe(`${prefix}/events`))
+  mqttClient.on('message', (topic, payload) => {
     let data
     try {
       data = JSON.parse(payload.toString())
@@ -592,6 +593,10 @@ async function installUpdate(mode) {
 app.whenReady().then(() => {
   if (!gotInstanceLock) return
   if (process.platform === 'darwin' && app.dock && !readPrefs().showDock) app.dock.hide()
+
+  powerMonitor.on('resume', () => {
+    if (mqttClient) mqttClient.reconnect()
+  })
 
   ipcMain.on('overlay-hide', () => {
     if (win && !win.isDestroyed()) win.hide()
