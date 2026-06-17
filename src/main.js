@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session, powerMonitor } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { spawn, execFileSync } = require('child_process')
@@ -594,6 +594,7 @@ app.whenReady().then(() => {
   if (!gotInstanceLock) return
   if (process.platform === 'darwin' && app.dock && !readPrefs().showDock) app.dock.hide()
 
+  const { powerMonitor } = require('electron')
   powerMonitor.on('resume', () => {
     if (mqttClient) mqttClient.reconnect()
   })
