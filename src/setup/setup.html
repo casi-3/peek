@@ -70,6 +70,33 @@
       </div>
     </section>
 
+    <section id="runtime" class="hidden">
+      <h2>Notifications</h2>
+      <div class="row">
+        <label>Cameras</label>
+        <div id="cameraList" class="camera-list"></div>
+      </div>
+      <label class="check">
+        <input id="sound" type="checkbox" />
+        <span class="check-text">Play sound on detection</span>
+      </label>
+      <label class="check">
+        <input id="snapshot" type="checkbox" />
+        <span class="check-text">Show an instant snapshot while the stream connects</span>
+      </label>
+      <div class="row">
+        <label for="dismiss">Dismiss after</label>
+        <select id="dismiss">
+          <option value="3">3 seconds</option>
+          <option value="5">5 seconds</option>
+          <option value="8">8 seconds</option>
+          <option value="15">15 seconds</option>
+          <option value="30">30 seconds</option>
+          <option value="0">Until dismissed</option>
+        </select>
+      </div>
+    </section>
+
     <section>
       <h2>Updates</h2>
       <label class="check">

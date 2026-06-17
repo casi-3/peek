@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/badge/release-v0.4.0-3ddc84" alt="Release" /></a>
+  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/badge/release-v0.4.1-3ddc84" alt="Release" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555" alt="Platforms" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
 </p>

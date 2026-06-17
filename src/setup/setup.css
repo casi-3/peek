@@ -22,12 +22,33 @@ html, body {
   user-select: none;
 }
 
+body {
+  overflow-y: auto;
+}
+
 #app {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  min-height: 100%;
   padding: 22px 24px;
   gap: 18px;
+}
+
+.camera-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.camera-list .check {
+  font-size: 13px;
+}
+
+.camera-list .empty {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 header h1 {

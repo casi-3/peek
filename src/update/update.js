@@ -59,7 +59,7 @@ async function start(mode) {
 window.peekUpdate.onProgress((p) => {
   const pct = Math.round(p * 100)
   el('fill').style.width = pct + '%'
-  el('pct').textContent = pct < 100 ? 'Downloading… ' + pct + '%' : 'Starting installer…'
+  el('pct').textContent = pct < 100 ? 'Downloading… ' + pct + '%' : 'Installing…'
 })
 
 window.peekUpdate.onError((msg) => {
@@ -82,6 +82,6 @@ el('skip').addEventListener('click', () => window.peekUpdate.skip())
   el('notes').innerHTML = renderNotes(data.notes)
   if (data.platform === 'darwin') {
     el('silent').classList.add('hidden')
-    el('sub').textContent = 'A new version of Peek is ready. It will open the installer.'
+    el('sub').textContent = 'A new version of Peek is ready. It will be installed and Peek will restart.'
   }
 })()

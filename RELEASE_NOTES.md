@@ -1,15 +1,11 @@
-## What's new in v0.4.0
+## What's new in v0.4.1
 
-**Stream fixes**
-- Stream names are now resolved through the Frigate config API, so cameras with multiple streams play the correct go2rtc source.
-- Fixed a connection leak on stream teardown, and the stream is reused on back-to-back detections from the same camera instead of restarting.
-- Fixed a setup bug where a host pasted with a scheme prefix produced an invalid URL.
+**Settings**
+- Camera toggles, sound, snapshot and the dismiss delay are now part of the Settings window once Peek is connected, so you can change them in one place instead of only from the menu bar.
+- Changing these no longer restarts Peek. A restart only happens when the connection details change.
 
-**Overlay**
-- Added a dismiss countdown bar at the top of the notification, so you can see how long it stays up.
+**macOS updates**
+- Updates now install in place: download, then Peek replaces itself and restarts automatically. No more opening a disk image to drag the app, and your configuration is kept.
+- This applies to updates from this version onward.
 
-**macOS reachability**
-- Peek now runs as a single instance and reopens Settings when relaunched from Spotlight or the Applications folder, so it stays reachable even when the menu bar icon ends up hidden behind the notch.
-- New optional "Keep an icon in the Dock" setting for a permanent entry point.
-
-Thanks to @NickLD, @saihgupr and @brandonjones24 for the reports and fixes, and to @veilofsecurity for the feedback on keeping Peek dock-free by default.
+Thanks to @NickLD and @brandonjones24 for the feedback that shaped this release.

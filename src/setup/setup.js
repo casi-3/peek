@@ -10,7 +10,10 @@ const fields = {
   mqttUser: el('mqttUser'),
   mqttPass: el('mqttPass'),
   autoUpdate: el('autoUpdate'),
-  showDock: el('showDock')
+  showDock: el('showDock'),
+  sound: el('sound'),
+  snapshot: el('snapshot'),
+  dismiss: el('dismiss')
 }
 const statusEl = el('status')
 const testBtn = el('test')
@@ -18,6 +21,7 @@ const saveBtn = el('save')
 const cancelBtn = el('cancel')
 
 let base = {}
+let started = false
 
 function parseMqtt(url) {
   try {
@@ -95,6 +99,46 @@ function valid() {
   return fields.frigateHost.value.trim().length > 0
 }
 
+function buildCameraList(cameras) {
+  const container = el('cameraList')
+  container.innerHTML = ''
+  if (!cameras.length) {
+    const span = document.createElement('span')
+    span.className = 'empty'
+    span.textContent = 'Waiting for events…'
+    container.appendChild(span)
+    return
+  }
+  for (const cam of cameras) {
+    const label = document.createElement('label')
+    label.className = 'check'
+    const input = document.createElement('input')
+    input.type = 'checkbox'
+    input.checked = cam.enabled !== false
+    input.dataset.camera = cam.name
+    const text = document.createElement('span')
+    text.className = 'check-text'
+    text.textContent = cam.label || cam.name
+    label.appendChild(input)
+    label.appendChild(text)
+    container.appendChild(label)
+  }
+}
+
+function runtimeOpts() {
+  if (!started) return {}
+  const cameras = {}
+  el('cameraList').querySelectorAll('input[data-camera]').forEach(input => {
+    cameras[input.dataset.camera] = input.checked
+  })
+  return {
+    sound: fields.sound.checked,
+    snapshot: fields.snapshot.checked,
+    dismissSeconds: Number(fields.dismiss.value),
+    cameras
+  }
+}
+
 async function init() {
   const p = await window.setup.loadPrefs()
   fields.autoUpdate.checked = !!(p && p.autoUpdate)
@@ -103,7 +147,15 @@ async function init() {
     const dockRow = el('dockRow')
     if (dockRow) dockRow.style.display = 'none'
   }
-  if (p && p.started) saveBtn.textContent = 'Save'
+  if (p && p.started) {
+    started = true
+    saveBtn.textContent = 'Save'
+    el('runtime').classList.remove('hidden')
+    fields.sound.checked = !!p.sound
+    fields.snapshot.checked = !!p.snapshot
+    fields.dismiss.value = String(p.dismissSeconds != null ? p.dismissSeconds : 8)
+    buildCameraList(p.cameras || [])
+  }
   const existing = await window.setup.load()
   if (existing) {
     base = existing
@@ -143,7 +195,7 @@ saveBtn.addEventListener('click', async () => {
     return
   }
   saveBtn.disabled = true
-  await window.setup.save(buildConfig(), { autoUpdate: fields.autoUpdate.checked, showDock: fields.showDock.checked })
+  await window.setup.save(buildConfig(), Object.assign({ autoUpdate: fields.autoUpdate.checked, showDock: fields.showDock.checked }, runtimeOpts()))
 })
 
 cancelBtn.addEventListener('click', () => window.setup.cancel())

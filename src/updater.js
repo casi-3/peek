@@ -58,8 +58,8 @@ function pickAsset(assets, platform) {
       names.find(a => /\.exe$/i.test(a.name)) || null
   }
   if (platform === 'darwin') {
-    return names.find(a => /\.dmg$/i.test(a.name)) ||
-      names.find(a => /\.zip$/i.test(a.name)) || null
+    return names.find(a => /\.zip$/i.test(a.name)) ||
+      names.find(a => /\.dmg$/i.test(a.name)) || null
   }
   return names.find(a => /\.appimage$/i.test(a.name)) || null
 }

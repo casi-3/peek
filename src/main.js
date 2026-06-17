@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session } = require('electron')
 const path = require('path')
-const { spawn } = require('child_process')
+const fs = require('fs')
+const { spawn, execFileSync } = require('child_process')
 const mqtt = require('mqtt')
 const { readConfig, saveConfig } = require('./config')
 const { readPrefs, writePrefs } = require('./prefs')
@@ -159,6 +160,18 @@ function loadPrefs() {
 
 function savePrefs() {
   writePrefs(prefs)
+}
+
+function applyRuntimePrefs(opts) {
+  if (!opts) return
+  if (typeof opts.sound === 'boolean') prefs.sound = opts.sound
+  if (typeof opts.snapshot === 'boolean') prefs.snapshot = opts.snapshot
+  if (opts.dismissSeconds != null) prefs.dismissSeconds = opts.dismissSeconds
+  if (opts.cameras && typeof opts.cameras === 'object') {
+    for (const [name, on] of Object.entries(opts.cameras)) {
+      prefs.cameras[name] = !!on
+    }
+  }
 }
 
 function cameraEnabled(camera) {
@@ -349,7 +362,7 @@ function openSetup() {
   }
   setupWin = new BrowserWindow({
     width: 460,
-    height: 748,
+    height: appStarted ? 940 : 748,
     resizable: false,
     fullscreenable: false,
     maximizable: false,
@@ -497,6 +510,66 @@ function runInstaller(file, mode) {
   }
 }
 
+function shellQuote(s) {
+  return "'" + String(s).replace(/'/g, "'\\''") + "'"
+}
+
+function installMacUpdate(zipPath) {
+  const appBundle = path.resolve(app.getPath('exe'), '..', '..', '..')
+  if (!/\.app$/.test(appBundle)) {
+    return { error: 'Could not locate the app bundle.' }
+  }
+  const parent = path.dirname(appBundle)
+  try {
+    fs.accessSync(parent, fs.constants.W_OK)
+  } catch (err) {
+    shell.showItemInFolder(zipPath)
+    return { error: 'Cannot update in place here. The download was revealed in Finder so you can replace Peek manually.' }
+  }
+  const work = path.join(app.getPath('temp'), 'peek-update-' + process.pid)
+  let newApp
+  try {
+    fs.rmSync(work, { recursive: true, force: true })
+    fs.mkdirSync(work, { recursive: true })
+    execFileSync('ditto', ['-x', '-k', zipPath, work])
+    newApp = path.join(work, path.basename(appBundle))
+    if (!fs.existsSync(newApp)) {
+      return { error: 'Update package did not contain the app.' }
+    }
+    execFileSync('xattr', ['-cr', newApp])
+    execFileSync('codesign', ['--force', '--deep', '--sign', '-', newApp])
+  } catch (err) {
+    return { error: 'Could not prepare the update: ' + err.message }
+  }
+  const script = [
+    '#!/bin/bash',
+    'PID=' + process.pid,
+    'APP=' + shellQuote(appBundle),
+    'NEW=' + shellQuote(newApp),
+    'STAGE="$APP.update"',
+    'BACKUP="$APP.old"',
+    'while kill -0 "$PID" 2>/dev/null; do sleep 0.2; done',
+    'rm -rf "$STAGE" "$BACKUP"',
+    'if ! ditto "$NEW" "$STAGE"; then exit 1; fi',
+    'mv "$APP" "$BACKUP"',
+    'if ! mv "$STAGE" "$APP"; then mv "$BACKUP" "$APP"; exit 1; fi',
+    'xattr -cr "$APP" || true',
+    'rm -rf "$BACKUP" ' + shellQuote(work),
+    'open "$APP"',
+    ''
+  ].join('\n')
+  const scriptPath = path.join(app.getPath('temp'), 'peek-update-' + process.pid + '.sh')
+  try {
+    fs.writeFileSync(scriptPath, script, { mode: 0o755 })
+  } catch (err) {
+    return { error: 'Could not stage the update: ' + err.message }
+  }
+  const child = spawn('/bin/bash', [scriptPath], { detached: true, stdio: 'ignore' })
+  child.unref()
+  setTimeout(() => app.quit(), 400)
+  return { ok: true }
+}
+
 async function installUpdate(mode) {
   if (!pendingUpdate || !pendingUpdate.asset) {
     return { error: 'No matching download for this platform.' }
@@ -508,6 +581,9 @@ async function installUpdate(mode) {
     })
   } catch (err) {
     return { error: 'Download failed: ' + err.message }
+  }
+  if (process.platform === 'darwin' && app.isPackaged && /\.zip$/i.test(dest)) {
+    return installMacUpdate(dest)
   }
   runInstaller(dest, mode)
   return { ok: true }
@@ -524,7 +600,19 @@ app.whenReady().then(() => {
   ipcMain.handle('setup-test', (e, cfg) => testConnection(cfg))
   ipcMain.handle('setup-load-prefs', () => {
     const p = prefs || readPrefs()
-    return { autoUpdate: !!(p && p.autoUpdate), showDock: !!(p && p.showDock), platform: process.platform, started: appStarted }
+    const cameras = appStarted
+      ? [...knownCameras].sort().map(name => ({ name, label: prettyName(name), enabled: cameraEnabled(name) }))
+      : []
+    return {
+      autoUpdate: !!(p && p.autoUpdate),
+      showDock: !!(p && p.showDock),
+      platform: process.platform,
+      started: appStarted,
+      sound: !!(p && p.sound),
+      snapshot: !!(p && p.snapshot),
+      dismissSeconds: p && p.dismissSeconds != null ? p.dismissSeconds : 8,
+      cameras
+    }
   })
   ipcMain.handle('setup-save', (e, cfg, opts) => {
     saveConfig(cfg)
@@ -551,6 +639,7 @@ app.whenReady().then(() => {
       const wasUpdates = !!prefs.autoUpdate
       prefs.autoUpdate = wantUpdates
       prefs.showDock = wantDock
+      applyRuntimePrefs(opts)
       savePrefs()
       if (needsReconnect) {
         app.relaunch()
@@ -562,6 +651,7 @@ app.whenReady().then(() => {
         if (wantDock) app.dock.show()
         else app.dock.hide()
       }
+      buildMenu()
       if (setupWin && !setupWin.isDestroyed()) setupWin.close()
       if (wantUpdates && !wasUpdates) setTimeout(() => checkForUpdates(false), 1000)
     }
