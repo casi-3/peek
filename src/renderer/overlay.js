@@ -44,7 +44,6 @@ function startTimerBar(seconds) {
     [{ transform: 'scaleX(1)' }, { transform: 'scaleX(0)' }],
     { duration: seconds * 1000, easing: 'linear', fill: 'forwards' }
   )
-  timerAnimation.onfinish = () => { timerAnimation = null }
 }
 
 function resetTimerBar() {

@@ -45,7 +45,6 @@ body {
   transform: scaleX(0);
   z-index: 5;
   opacity: 0;
-  transition: background 0.4s ease;
 }
 
 #video {
