@@ -45,7 +45,6 @@ body {
   transform: scaleX(0);
   z-index: 5;
   opacity: 0;
-  transition: background 0.4s ease;
 }
 
 #video {
@@ -70,8 +69,17 @@ body {
   z-index: 1;
 }
 
-#poster {
+#bbox-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   z-index: 2;
+  pointer-events: none;
+}
+
+#poster {
+  z-index: 3;
   opacity: 0;
   transition: opacity 0.4s ease;
 }
@@ -81,7 +89,7 @@ body {
   position: absolute;
   left: 0;
   right: 0;
-  z-index: 3;
+  z-index: 4;
   padding: 12px 14px;
   color: #fff;
   pointer-events: none;
@@ -132,25 +140,36 @@ body {
   background: rgba(0, 0, 0, 0.6);
 }
 
-#line {
+#detections {
   display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
   align-items: center;
-  justify-content: space-between;
 }
 
-#badge {
+.chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 16px;
   font-weight: 700;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 7px;
+  padding: 3px 8px 3px 6px;
+  background: rgba(0, 0, 0, 0.25);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
 }
 
-#score {
+.chip-score {
   font-size: 12px;
   font-weight: 700;
   color: #04130a;
   background: #3ddc84;
   padding: 2px 9px;
   border-radius: 10px;
+  text-shadow: none;
 }
 
 #info {

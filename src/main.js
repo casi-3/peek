@@ -29,6 +29,7 @@ let appStarted = false
 let frigatePin = null
 let frigateToken = null
 let cameraStreamMap = {}
+let cameraDetectMap = {}
 let certProcSet = false
 const knownCameras = new Set()
 
@@ -58,7 +59,18 @@ function buildStreamMap(frigateConfig) {
       const first = Object.values(streams)[0]
       if (first) cameraStreamMap[name] = first
     }
+    const detect = cam && cam.detect
+    if (detect && detect.width && detect.height) {
+      cameraDetectMap[name] = { width: detect.width, height: detect.height }
+    }
   }
+}
+
+function normalizeBox(box, camera) {
+  if (!box || !Array.isArray(box) || box.length < 4) return null
+  const dims = cameraDetectMap[camera]
+  if (!dims) return null
+  return [box[0] / dims.width, box[1] / dims.height, box[2] / dims.width, box[3] / dims.height]
 }
 
 async function fetchFrigateConfig(token) {
@@ -135,6 +147,8 @@ function defaultPrefs() {
     sound: false,
     snapshot: true,
     dismissSeconds: config.dismissSeconds != null ? config.dismissSeconds : 8,
+    showAllObjectsInFrame: true,
+    showBoundingBoxes: true,
     autoUpdate: false,
     showDock: false,
     skipVersion: '',
@@ -150,6 +164,8 @@ function loadPrefs() {
     sound: saved.sound != null ? saved.sound : base.sound,
     snapshot: saved.snapshot != null ? saved.snapshot : base.snapshot,
     dismissSeconds: saved.dismissSeconds != null ? saved.dismissSeconds : base.dismissSeconds,
+    showAllObjectsInFrame: saved.showAllObjectsInFrame != null ? saved.showAllObjectsInFrame : base.showAllObjectsInFrame,
+    showBoundingBoxes: saved.showBoundingBoxes != null ? saved.showBoundingBoxes : base.showBoundingBoxes,
     autoUpdate: saved.autoUpdate != null ? saved.autoUpdate : base.autoUpdate,
     showDock: saved.showDock != null ? saved.showDock : base.showDock,
     skipVersion: saved.skipVersion != null ? saved.skipVersion : base.skipVersion,
@@ -167,6 +183,8 @@ function applyRuntimePrefs(opts) {
   if (typeof opts.sound === 'boolean') prefs.sound = opts.sound
   if (typeof opts.snapshot === 'boolean') prefs.snapshot = opts.snapshot
   if (opts.dismissSeconds != null) prefs.dismissSeconds = opts.dismissSeconds
+  if (typeof opts.showAllObjectsInFrame === 'boolean') prefs.showAllObjectsInFrame = opts.showAllObjectsInFrame
+  if (typeof opts.showBoundingBoxes === 'boolean') prefs.showBoundingBoxes = opts.showBoundingBoxes
   if (opts.cameras && typeof opts.cameras === 'object') {
     for (const [name, on] of Object.entries(opts.cameras)) {
       prefs.cameras[name] = !!on
@@ -229,6 +247,24 @@ function buildMenu() {
         savePrefs()
       }
     },
+    {
+      label: 'Show all objects in frame',
+      type: 'checkbox',
+      checked: prefs.showAllObjectsInFrame !== false,
+      click: (item) => {
+        prefs.showAllObjectsInFrame = item.checked
+        savePrefs()
+      }
+    },
+    {
+      label: 'Show bounding boxes',
+      type: 'checkbox',
+      checked: prefs.showBoundingBoxes !== false,
+      click: (item) => {
+        prefs.showBoundingBoxes = item.checked
+        savePrefs()
+      }
+    },
     { label: 'Dismiss after', submenu: dismissItems },
     { type: 'separator' },
     { label: 'Check for updates…', click: () => checkForUpdates(true) },
@@ -281,10 +317,12 @@ function handleEvent(data) {
     subLabel: subLabel || null,
     plate: after.recognized_license_plate || null,
     zones: after.entered_zones || [],
+    box: prefs.showBoundingBoxes !== false ? normalizeBox(after.box, after.camera) : null,
     streamUrl: streamUrl(after.camera),
     poster: prefs.snapshot ? snapshotUrl(after.camera) : null,
     sound: prefs.sound,
-    dismiss: prefs.dismissSeconds
+    dismiss: prefs.dismissSeconds,
+    showAllObjectsInFrame: prefs.showAllObjectsInFrame !== false
   }
 
   if (!win || win.isDestroyed()) return
@@ -611,6 +649,8 @@ app.whenReady().then(() => {
       sound: !!(p && p.sound),
       snapshot: !!(p && p.snapshot),
       dismissSeconds: p && p.dismissSeconds != null ? p.dismissSeconds : 8,
+      showAllObjectsInFrame: p && p.showAllObjectsInFrame !== false,
+      showBoundingBoxes: p && p.showBoundingBoxes !== false,
       cameras
     }
   })

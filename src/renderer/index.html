@@ -7,16 +7,13 @@
   <body>
     <div id="card" class="hidden">
       <div id="timer-bar"></div>
-      <div id="video"><img id="poster" alt="" /></div>
+      <div id="video"><canvas id="bbox-canvas"></canvas><img id="poster" alt="" /></div>
       <div id="top">
         <span id="cam"></span>
         <button id="close" aria-label="close">✕</button>
       </div>
       <div id="bottom">
-        <div id="line">
-          <span id="badge"></span>
-          <span id="score"></span>
-        </div>
+        <div id="detections"></div>
         <div id="info"></div>
       </div>
     </div>
