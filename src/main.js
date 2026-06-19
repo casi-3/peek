@@ -28,6 +28,7 @@ let pendingUpdate = null
 let appStarted = false
 let frigatePin = null
 let frigateToken = null
+let tokenRefreshTimer = null
 let cameraStreamMap = {}
 let certProcSet = false
 let mqttClient = null
@@ -326,6 +327,26 @@ function applyCertPin() {
   })
 }
 
+function parseJwtExp(token) {
+  try {
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const payload = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'))
+    return typeof payload.exp === 'number' ? payload.exp : null
+  } catch (err) {
+    return null
+  }
+}
+
+function scheduleTokenRefresh(token) {
+  if (tokenRefreshTimer) clearTimeout(tokenRefreshTimer)
+  const exp = parseJwtExp(token)
+  if (!exp) return
+  const msUntilExpiry = exp * 1000 - Date.now()
+  // Refresh 60s before expiry; clamp between 60s and 55min
+  const delay = Math.min(Math.max(msUntilExpiry - 60 * 1000, 60 * 1000), 55 * 60 * 1000)
+  tokenRefreshTimer = setTimeout(() => initFrigateAuth(), delay)
+}
+
 async function initFrigateAuth() {
   if (!config || !config.frigateUser || !frigateAuth.isHttps(config.frigateUrl)) return
   try {
@@ -342,6 +363,7 @@ async function initFrigateAuth() {
       httpOnly: true,
       sameSite: 'no_restriction'
     })
+    scheduleTokenRefresh(token)
   } catch (err) {
     console.error('[frigate-auth] ' + err.message)
   }
@@ -597,6 +619,7 @@ app.whenReady().then(() => {
   const { powerMonitor } = require('electron')
   powerMonitor.on('resume', () => {
     if (mqttClient) mqttClient.reconnect()
+    initFrigateAuth()
   })
 
   ipcMain.on('overlay-hide', () => {
