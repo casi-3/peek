@@ -85,12 +85,30 @@
         <span class="check-text">Show an instant snapshot while the stream connects</span>
       </label>
       <label class="check">
+        <input id="cropToObject" type="checkbox" />
+        <span class="check-text">Crop to detected object</span>
+        <span class="info" tabindex="0">i<span class="tip">Dynamically zooms and pans the overlay to fit the bounding box of the detected object.</span></span>
+      </label>
+      <div class="row" id="cropRatioRow">
+        <label for="cropRatio">Crop Aspect Ratio</label>
+        <select id="cropRatio">
+          <option value="16:9">16:9</option>
+          <option value="4:3">4:3</option>
+          <option value="1:1">1:1</option>
+        </select>
+      </div>
+      <label class="check">
         <input id="showAllObjectsInFrame" type="checkbox" />
         <span class="check-text">Show all objects in frame (e.g. person + car + cat)</span>
       </label>
       <label class="check">
         <input id="showBoundingBoxes" type="checkbox" />
         <span class="check-text">Show bounding boxes on video</span>
+      </label>
+      <label class="check">
+        <input id="highResStream" type="checkbox" />
+        <span class="check-text">Prefer high-res stream</span>
+        <span class="info" tabindex="0">i<span class="tip">Bypasses Frigate's sub-stream mapping and attempts to request the main camera stream for maximum quality.</span></span>
       </label>
       <div class="row">
         <label for="dismiss">Dismiss after</label>
@@ -120,6 +138,10 @@
         <span class="check-text">Check for updates on launch and notify me</span>
         <span class="info" tabindex="0">i<span class="tip">When enabled, Peek connects to GitHub over the internet to check for a new version. Leave this off to keep Peek fully local, with no external connection. You can still check manually anytime from the menu.</span></span>
       </label>
+      <div class="row">
+        <label for="updateRepo">Update Repository</label>
+        <input id="updateRepo" type="text" placeholder="casi-3/peek" />
+      </div>
       <label class="check" id="startupRow">
         <input id="openAtLogin" type="checkbox" />
         <span class="check-text">Open on startup</span>

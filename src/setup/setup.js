@@ -10,10 +10,14 @@ const fields = {
   mqttUser: el('mqttUser'),
   mqttPass: el('mqttPass'),
   autoUpdate: el('autoUpdate'),
+  updateRepo: el('updateRepo'),
   openAtLogin: el('openAtLogin'),
   showDock: el('showDock'),
   sound: el('sound'),
   snapshot: el('snapshot'),
+  cropToObject: el('cropToObject'),
+  cropRatio: el('cropRatio'),
+  highResStream: el('highResStream'),
   showAllObjectsInFrame: el('showAllObjectsInFrame'),
   showBoundingBoxes: el('showBoundingBoxes'),
   dismiss: el('dismiss'),
@@ -138,6 +142,9 @@ function runtimeOpts() {
   return {
     sound: fields.sound.checked,
     snapshot: fields.snapshot.checked,
+    cropToObject: fields.cropToObject.checked,
+    cropRatio: fields.cropRatio.value,
+    highResStream: fields.highResStream.checked,
     showAllObjectsInFrame: fields.showAllObjectsInFrame.checked,
     showBoundingBoxes: fields.showBoundingBoxes.checked,
     dismissSeconds: Number(fields.dismiss.value),
@@ -149,6 +156,7 @@ function runtimeOpts() {
 async function init() {
   const p = await window.setup.loadPrefs()
   fields.autoUpdate.checked = !!(p && p.autoUpdate)
+  fields.updateRepo.value = (p && p.updateRepo) || ''
   fields.openAtLogin.checked = !!(p && p.openAtLogin)
   fields.showDock.checked = !!(p && p.showDock)
   if (p && p.platform !== 'darwin' && p.platform !== 'win32') {
@@ -165,6 +173,9 @@ async function init() {
     el('runtime').classList.remove('hidden')
     fields.sound.checked = !!p.sound
     fields.snapshot.checked = !!p.snapshot
+    fields.cropToObject.checked = !!p.cropToObject
+    fields.cropRatio.value = p.cropRatio || '16:9'
+    fields.highResStream.checked = !!p.highResStream
     fields.showAllObjectsInFrame.checked = p.showAllObjectsInFrame !== false
     fields.showBoundingBoxes.checked = p.showBoundingBoxes !== false
     fields.dismiss.value = String(p.dismissSeconds != null ? p.dismissSeconds : 8)
@@ -186,6 +197,12 @@ async function init() {
     fields.mqttPass.value = m.pass
     fields.corner.value = existing.corner || 'top-right'
   }
+  
+  const toggleCropRatio = () => {
+    el('cropRatioRow').style.display = fields.cropToObject.checked ? 'flex' : 'none'
+  }
+  fields.cropToObject.addEventListener('change', toggleCropRatio)
+  toggleCropRatio()
 }
 
 testBtn.addEventListener('click', async () => {
@@ -210,7 +227,7 @@ saveBtn.addEventListener('click', async () => {
     return
   }
   saveBtn.disabled = true
-  await window.setup.save(buildConfig(), Object.assign({ autoUpdate: fields.autoUpdate.checked, openAtLogin: fields.openAtLogin.checked, showDock: fields.showDock.checked }, runtimeOpts()))
+  await window.setup.save(buildConfig(), Object.assign({ autoUpdate: fields.autoUpdate.checked, updateRepo: fields.updateRepo.value.trim(), openAtLogin: fields.openAtLogin.checked, showDock: fields.showDock.checked }, runtimeOpts()))
 })
 
 cancelBtn.addEventListener('click', () => window.setup.cancel())

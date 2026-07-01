@@ -72,6 +72,80 @@ function labelText(label) {
   return entry ? `${entry[0]} ${entry[1]}` : label
 }
 
+function updateCrop() {
+  if (!stream || activeEvents.size === 0) return
+  
+  const firstEvent = activeEvents.values().next().value
+  if (!firstEvent.cropToObject) {
+    if (stream) {
+      stream.style.transition = 'transform 0.1s ease-out'
+      stream.style.transform = ''
+      stream.style.transformOrigin = '50% 50%'
+      bboxCanvas.style.transition = 'transform 0.1s ease-out'
+      bboxCanvas.style.transform = ''
+      bboxCanvas.style.transformOrigin = '50% 50%'
+    }
+    return
+  }
+  
+  const videoWidth = stream.video.videoWidth
+  const videoHeight = stream.video.videoHeight
+  if (!videoWidth || !videoHeight) return
+
+  let minX = 1, minY = 1, maxX = 0, maxY = 0
+  for (const ev of activeEvents.values()) {
+    if (ev.boxRelative) {
+      minX = Math.min(minX, ev.boxRelative[0])
+      minY = Math.min(minY, ev.boxRelative[1])
+      maxX = Math.max(maxX, ev.boxRelative[2])
+      maxY = Math.max(maxY, ev.boxRelative[3])
+    }
+  }
+  
+  if (maxX <= minX || maxY <= minY) return
+
+  const boxW = maxX - minX
+  const boxH = maxY - minY
+  const cx = (minX + maxX) / 2
+  const cy = (minY + maxY) / 2
+
+  const VW = videoWidth
+  const VH = videoHeight
+  
+  const objCx = cx * VW
+  const objCy = cy * VH
+  
+  const winW = window.innerWidth
+  const winH = window.innerHeight
+  const winCx = winW / 2
+  const winCy = winH / 2
+  
+  const objW = boxW * VW
+  const objH = boxH * VH
+  
+  const idealScale = Math.min(winW / (objW * 2), winH / (objH * 2))
+  const minScaleToCover = Math.max(winW / VW, winH / VH)
+  
+  const S = Math.max(minScaleToCover, Math.min(minScaleToCover * 4, idealScale))
+  
+  let tx = winCx - (objCx * S)
+  let ty = winCy - (objCy * S)
+  
+  const minTx = winW - (VW * S)
+  const minTy = winH - (VH * S)
+  
+  tx = Math.min(0, Math.max(minTx, tx))
+  ty = Math.min(0, Math.max(minTy, ty))
+  
+  stream.style.transition = 'transform 0.1s ease-out'
+  stream.style.transformOrigin = '0 0'
+  stream.style.transform = `translate(${tx}px, ${ty}px) scale(${S})`
+  
+  bboxCanvas.style.transition = 'transform 0.1s ease-out'
+  bboxCanvas.style.transformOrigin = '0 0'
+  bboxCanvas.style.transform = `translate(${tx}px, ${ty}px) scale(${S})`
+}
+
 function syncCanvasSize() {
   const w = bboxCanvas.offsetWidth
   const h = bboxCanvas.offsetHeight
@@ -171,7 +245,7 @@ function renderDetections() {
   infoEl.style.display = extras.length ? 'block' : 'none'
 }
 
-function applyVideoSettings(muted) {
+function applyVideoSettings(event, muted) {
   if (!stream) return
   if (stream.video) {
     stream.video.muted = muted
@@ -179,35 +253,74 @@ function applyVideoSettings(muted) {
     stream.video.disableRemotePlayback = true
     stream.video.addEventListener('playing', () => {
       poster.style.opacity = '0'
-      drawBoxes()
+      const videoWidth = stream.video.videoWidth
+      const videoHeight = stream.video.videoHeight
+      if (videoWidth && videoHeight) {
+        if (!event.cropToObject) {
+          const ratio = videoWidth / videoHeight
+          const newWidth = Math.round(window.innerHeight * ratio)
+          window.overlay.resize(newWidth, window.innerHeight)
+          stream.style.width = '100%'
+          stream.style.height = '100%'
+          bboxCanvas.style.width = '100%'
+          bboxCanvas.style.height = '100%'
+        } else {
+          stream.style.width = videoWidth + 'px'
+          stream.style.height = videoHeight + 'px'
+          bboxCanvas.style.width = videoWidth + 'px'
+          bboxCanvas.style.height = videoHeight + 'px'
+        }
+        
+        stream.style.maxWidth = 'none'
+        stream.style.position = 'absolute'
+        stream.style.left = '0'
+        stream.style.top = '0'
+        
+        drawBoxes()
+        updateCrop()
+      }
     }, { once: true })
   } else {
-    requestAnimationFrame(() => applyVideoSettings(muted))
+    requestAnimationFrame(() => applyVideoSettings(event, muted))
   }
 }
 
-function startStream(url, muted) {
+function startStream(event, muted) {
   stopStream()
-  stream = document.createElement('video-stream')
-  stream.background = true
-  stream.mode = 'webrtc,mse'
-  stream.src = url
+  if (event.streamUrl === '__MOCK_IMAGE__') {
+    stream = document.createElement('div')
+    stream.style.backgroundImage = 'url("https://picsum.photos/id/237/1280/720")'
+    stream.style.backgroundSize = '100% 100%'
+    stream.style.zIndex = '1'
+    
+    stream.video = document.createElement('div')
+    stream.video.videoWidth = 1280
+    stream.video.videoHeight = 720
+    stream.video.style = {}
+    stream.video.addEventListener = (evt, cb) => {
+      if (evt === 'playing') setTimeout(() => cb(), 100)
+    }
+  } else {
+    stream = document.createElement('video-stream')
+    stream.background = true
+    stream.mode = 'webrtc,mse'
+    stream.src = event.streamUrl
+  }
   videoBox.appendChild(stream)
-  applyVideoSettings(muted)
+  applyVideoSettings(event, muted)
 }
 
 function stopStream() {
   if (stream) {
-    stream.ondisconnect()
+    if (stream.ondisconnect) stream.ondisconnect()
     stream.remove()
     stream = null
   }
 }
-
 function show(event) {
   clearTimeout(dismissTimer)
 
-  const reuseCard = card.classList.contains('show') && event.streamUrl === activeStreamUrl
+  const reuseCard = activeStreamUrl && event.streamUrl === activeStreamUrl
 
   if (!reuseCard || !event.showAllObjectsInFrame) {
     activeEvents.clear()
@@ -232,7 +345,7 @@ function show(event) {
     poster.style.opacity = '0'
     poster.removeAttribute('src')
   }
-  startStream(event.streamUrl, !event.sound)
+  startStream(event, !event.sound)
   card.classList.remove('hidden')
   requestAnimationFrame(() => card.classList.add('show'))
 }
@@ -240,6 +353,9 @@ function show(event) {
 function hide() {
   clearTimeout(dismissTimer)
   resetTimerBar()
+  
+  const eventIds = Array.from(activeEvents.keys())
+  
   clearBoxes()
   activeEvents.clear()
   colorMap.clear()
@@ -251,7 +367,7 @@ function hide() {
   setTimeout(() => {
     stopStream()
     card.classList.add('hidden')
-    window.overlay.hide()
+    window.overlay.hide(eventIds)
   }, 320)
 }
 
@@ -262,12 +378,14 @@ window.overlay.onEvent((event) => {
     activeEvents.set(event.id, event)
     renderDetections()
     drawBoxes()
+    updateCrop()
   } else if (event.type === 'end' && activeEvents.has(event.id)) {
     activeEvents.delete(event.id)
     colorMap.delete(event.id)
     if (activeEvents.size > 0) {
       renderDetections()
       drawBoxes()
+      updateCrop()
     } else {
       clearBoxes()
       if (event.dismiss > 0) {
@@ -275,6 +393,12 @@ window.overlay.onEvent((event) => {
         startTimerBar(event.dismiss)
       }
     }
+  }
+})
+
+window.overlay.onSetMuted && window.overlay.onSetMuted((muted) => {
+  if (stream && stream.video) {
+    stream.video.muted = muted
   }
 })
 
