@@ -14,9 +14,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - macos-latest
-          - windows-latest
+        include:
+          - os: macos-latest
+            name: macos-arm64
+            args: --mac --arm64
+          - os: macos-latest
+            name: macos-intel
+            args: --mac --x64
+          - os: windows-latest
+            name: windows
+            args: --win
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -24,10 +31,10 @@ jobs:
         with:
           node-version: 20
       - run: npm ci
-      - run: npm run dist -- --publish never
+      - run: npm run dist -- --publish never ${{ matrix.args }}
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}
+          name: ${{ matrix.name }}
           path: |
             dist/*.dmg
             dist/*.zip

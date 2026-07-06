@@ -7,6 +7,7 @@ const { readConfig, saveConfig } = require('./config')
 const { readPrefs, writePrefs } = require('./prefs')
 const updater = require('./updater')
 const frigateAuth = require('./frigate-auth')
+const grouping = require('./grouping')
 
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
@@ -18,7 +19,19 @@ if (!gotInstanceLock) {
   if (process.platform === 'darwin') app.on('activate', () => openSetup())
 }
 
-let win = null
+const activeWindows = new Map()
+let indicatorWin = null
+const pendingEvents = new Map()
+const closedEvents = new Set()
+const eventGroupMap = new Map()
+
+function markEventClosed(id) {
+  closedEvents.add(id)
+  if (closedEvents.size > 500) {
+    const first = closedEvents.keys().next().value
+    closedEvents.delete(first)
+  }
+}
 let setupWin = null
 let updateWin = null
 let tray = null
@@ -33,7 +46,10 @@ let mqttClient = null
 let cameraStreamMap = {}
 let cameraDetectMap = {}
 let certProcSet = false
+// currentDynamicWidth removed
 const knownCameras = new Set()
+const eventAliases = new Map()
+const recentEvents = new Map()
 
 const DISMISS_OPTIONS = [
   { label: '3 seconds', value: 3 },
@@ -49,7 +65,7 @@ function httpToWs(url) {
 }
 
 function streamUrl(camera) {
-  const streamName = cameraStreamMap[camera] || camera
+  const streamName = prefs.highResStream ? camera : (cameraStreamMap[camera] || camera)
   return `${httpToWs(config.frigateUrl)}/live/webrtc/api/ws?src=${encodeURIComponent(streamName)}`
 }
 
@@ -100,25 +116,76 @@ function prettyName(camera) {
   return camera.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
-function overlaySize() {
-  return { width: config.width || 380, height: config.height || 300 }
+function overlaySize(dynamicWidth = null) {
+  return grouping.getOverlaySize(config, prefs, dynamicWidth)
 }
 
-function positionWindow() {
+function getViewportForBox(boxRelative, camera) {
+  return grouping.getViewportForBox(boxRelative, camera, cameraDetectMap, config, prefs)
+}
+
+function viewportsOverlap(vp1, vp2) {
+  return grouping.viewportsOverlap(vp1, vp2)
+}
+
+function positionWindows() {
   const area = screen.getPrimaryDisplay().workArea
-  const { width, height } = overlaySize()
   const margin = config.margin != null ? config.margin : 24
   const corner = config.corner || 'top-right'
-  let x = area.x + area.width - width - margin
-  let y = area.y + margin
-  if (corner.includes('left')) x = area.x + margin
-  if (corner.includes('bottom')) y = area.y + area.height - height - margin
-  win.setBounds({ x, y, width, height })
+  
+  let currentY = margin
+  if (corner.includes('bottom')) currentY = area.height - margin
+
+  const windows = Array.from(activeWindows.values())
+  windows.forEach((w, i) => {
+    if (w.isDestroyed()) return
+    const { width, height } = overlaySize(w.dynamicWidth)
+    let x = area.x + area.width - width - margin
+    if (corner.includes('left')) x = area.x + margin
+    
+    let y = area.y + currentY
+    if (corner.includes('bottom')) {
+      y = area.y + currentY - height
+      currentY -= (height + margin)
+    } else {
+      currentY += (height + margin)
+    }
+    w.setBounds({ x, y, width, height })
+  })
+
+  // Position indicatorWin
+  if (indicatorWin && !indicatorWin.isDestroyed()) {
+    if (pendingEvents.size > 0) {
+      const { width } = overlaySize() // default approx width
+      const indHeight = 32
+      let x = area.x + area.width - width - margin
+      if (corner.includes('left')) x = area.x + margin
+      
+      let y = area.y + currentY
+      if (corner.includes('bottom')) {
+        y = area.y + currentY - indHeight
+      }
+      indicatorWin.setBounds({ x, y, width, height: indHeight })
+      indicatorWin.webContents.send('set-count', pendingEvents.size)
+      indicatorWin.showInactive()
+    } else {
+      indicatorWin.hide()
+    }
+  }
 }
 
-function createWindow() {
+function updateAudio() {
+  const windows = Array.from(activeWindows.values())
+  windows.forEach((w, i) => {
+    if (!w.isDestroyed()) {
+      w.webContents.send('set-muted', !prefs.sound || i !== 0)
+    }
+  })
+}
+
+function createEventWindow(eventId) {
   const { width, height } = overlaySize()
-  win = new BrowserWindow({
+  const w = new BrowserWindow({
     width,
     height,
     frame: false,
@@ -140,10 +207,73 @@ function createWindow() {
       backgroundThrottling: false
     }
   })
-  win.setAlwaysOnTop(true, 'screen-saver')
-  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
-  positionWindow()
+  w.setAlwaysOnTop(true, 'screen-saver')
+  w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  w.loadFile(path.join(__dirname, 'renderer', 'index.html'))
+  w.eventId = eventId
+  w.dynamicWidth = null
+  w.isLoading = true
+  w.eventQueue = []
+  
+  w.webContents.on('did-finish-load', () => {
+    w.isLoading = false
+    for (const ev of w.eventQueue) {
+      w.webContents.send('frigate-event', ev)
+    }
+    w.eventQueue = []
+  })
+  
+  w.on('closed', () => {
+    activeWindows.delete(eventId)
+    
+    if (pendingEvents.size > 0 && activeWindows.size < 4) {
+      const firstPending = pendingEvents.keys().next().value
+      const pendingEvent = pendingEvents.get(firstPending)
+      pendingEvents.delete(firstPending)
+      
+      const newWin = createEventWindow(firstPending)
+      activeWindows.set(firstPending, newWin)
+      newWin.showInactive()
+      pendingEvent.sound = prefs.sound
+      pendingEvent.type = 'new'
+      newWin.eventQueue.push(pendingEvent)
+      newWin.webContents.on('did-finish-load', () => {
+        updateAudio()
+      })
+    }
+    
+    positionWindows()
+    updateAudio()
+  })
+  
+  return w
+}
+
+function initIndicatorWin() {
+  if (indicatorWin) return
+  indicatorWin = new BrowserWindow({
+    width: 300,
+    height: 32,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    alwaysOnTop: true,
+    hasShadow: false,
+    show: false,
+    backgroundColor: '#00000000',
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  })
+  indicatorWin.setAlwaysOnTop(true, 'screen-saver')
+  indicatorWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  indicatorWin.loadFile(path.join(__dirname, 'renderer', 'indicator.html'))
 }
 
 function defaultPrefs() {
@@ -157,9 +287,13 @@ function defaultPrefs() {
     snapshot: true,
     dismissSeconds: config.dismissSeconds != null ? config.dismissSeconds : 8,
     clickAction: 'event',
+    cropToObject: false,
+    cropRatio: '16:9',
+    highResStream: false,
     showAllObjectsInFrame: true,
     showBoundingBoxes: true,
     autoUpdate: false,
+    updateRepo: '',
     showDock: false,
     openAtLogin: false,
     skipVersion: '',
@@ -176,9 +310,13 @@ function loadPrefs() {
     snapshot: saved.snapshot != null ? saved.snapshot : base.snapshot,
     dismissSeconds: saved.dismissSeconds != null ? saved.dismissSeconds : base.dismissSeconds,
     clickAction: saved.clickAction != null ? saved.clickAction : base.clickAction,
+    cropToObject: saved.cropToObject != null ? saved.cropToObject : base.cropToObject,
+    cropRatio: saved.cropRatio != null ? saved.cropRatio : base.cropRatio,
+    highResStream: saved.highResStream != null ? saved.highResStream : base.highResStream,
     showAllObjectsInFrame: saved.showAllObjectsInFrame != null ? saved.showAllObjectsInFrame : base.showAllObjectsInFrame,
     showBoundingBoxes: saved.showBoundingBoxes != null ? saved.showBoundingBoxes : base.showBoundingBoxes,
     autoUpdate: saved.autoUpdate != null ? saved.autoUpdate : base.autoUpdate,
+    updateRepo: saved.updateRepo != null ? saved.updateRepo : base.updateRepo,
     showDock: saved.showDock != null ? saved.showDock : base.showDock,
     openAtLogin: saved.openAtLogin != null ? saved.openAtLogin : base.openAtLogin,
     skipVersion: saved.skipVersion != null ? saved.skipVersion : base.skipVersion,
@@ -208,6 +346,9 @@ function applyRuntimePrefs(opts) {
   if (!opts) return
   if (typeof opts.sound === 'boolean') prefs.sound = opts.sound
   if (typeof opts.snapshot === 'boolean') prefs.snapshot = opts.snapshot
+  if (typeof opts.cropToObject === 'boolean') prefs.cropToObject = opts.cropToObject
+  if (opts.cropRatio) prefs.cropRatio = opts.cropRatio
+  if (typeof opts.highResStream === 'boolean') prefs.highResStream = opts.highResStream
   if (opts.dismissSeconds != null) prefs.dismissSeconds = opts.dismissSeconds
   if (opts.clickAction) prefs.clickAction = opts.clickAction
   if (typeof opts.showAllObjectsInFrame === 'boolean') prefs.showAllObjectsInFrame = opts.showAllObjectsInFrame
@@ -335,6 +476,59 @@ function handleEvent(data) {
   if (data.type === 'new' && score < minScore) return
 
   const subLabel = Array.isArray(after.sub_label) ? after.sub_label[0] : after.sub_label
+  const detect = cameraDetectMap[after.camera]
+  let boxRelative = null
+  if (detect && after.box && after.box.length === 4) {
+    boxRelative = [
+      after.box[0] / detect.width,
+      after.box[1] / detect.height,
+      after.box[2] / detect.width,
+      after.box[3] / detect.height
+    ]
+  }
+
+  let streamUrlPath = streamUrl(after.camera)
+  if (after.camera === '__MOCK_CAMERA__') {
+    streamUrlPath = '__MOCK_IMAGE__'
+    boxRelative = [500/1280, 150/720, 750/1280, 650/720] // Static math for Big Buck Bunny
+  }
+
+  let realId = after.id
+  while (eventAliases.has(realId)) {
+    realId = eventAliases.get(realId)
+  }
+  after.id = realId
+
+  if (data.type === 'new') {
+    const now = Date.now()
+    let bestMatch = null
+    let minDistance = 0.2
+
+    for (const [id, hist] of recentEvents.entries()) {
+      if (hist.camera !== after.camera || hist.label !== after.label) continue
+      if (now - hist.time > 15000) continue
+
+      if (hist.box && boxRelative) {
+        const cx1 = (hist.box[0] + hist.box[2]) / 2
+        const cy1 = (hist.box[1] + hist.box[3]) / 2
+        const cx2 = (boxRelative[0] + boxRelative[2]) / 2
+        const cy2 = (boxRelative[1] + boxRelative[3]) / 2
+        
+        const dist = Math.sqrt((cx1 - cx2) ** 2 + (cy1 - cy2) ** 2)
+        if (dist < minDistance) {
+          minDistance = dist
+          bestMatch = id
+        }
+      }
+    }
+
+    if (bestMatch) {
+      eventAliases.set(after.id, bestMatch)
+      after.id = bestMatch
+      data.type = 'update'
+    }
+  }
+
   const event = {
     id: after.id,
     type: data.type,
@@ -345,20 +539,149 @@ function handleEvent(data) {
     plate: after.recognized_license_plate || null,
     zones: after.entered_zones || [],
     box: prefs.showBoundingBoxes !== false ? normalizeBox(after.box, after.camera) : null,
-    streamUrl: streamUrl(after.camera),
+    streamUrl: streamUrlPath,
     poster: prefs.snapshot ? snapshotUrl(after.camera) : null,
     sound: prefs.sound,
     dismiss: prefs.dismissSeconds,
     clickUrl: clickUrlForEvent(after.camera, after.id),
-    showAllObjectsInFrame: prefs.showAllObjectsInFrame !== false
+    boxRelative,
+    cropToObject: prefs.cropToObject,
+    cropRatio: prefs.cropRatio || '16:9',
+    showAllObjectsInFrame: true
   }
 
-  if (!win || win.isDestroyed()) return
-  if (data.type === 'new') {
-    positionWindow()
-    win.showInactive()
+  let targetId = prefs.showAllObjectsInFrame !== false ? after.camera : after.id
+
+  if (prefs.showAllObjectsInFrame === false) {
+    if (data.type === 'end') {
+      if (eventGroupMap.has(after.id)) {
+        targetId = eventGroupMap.get(after.id)
+        eventGroupMap.delete(after.id)
+      }
+    } else {
+      let currentGroup = eventGroupMap.get(after.id)
+
+      if (currentGroup && (activeWindows.has(currentGroup) || pendingEvents.has(currentGroup))) {
+        const splitResult = grouping.checkSplitForEvent(
+          event, cameraDetectMap, config, prefs, activeWindows, pendingEvents, eventGroupMap, recentEvents
+        )
+        if (splitResult.shouldSplit) {
+          const wOld = activeWindows.get(currentGroup)
+          if (splitResult.action === 'split_self') {
+            if (wOld && !wOld.isDestroyed()) {
+              wOld.webContents.send('frigate-event', { ...event, type: 'end' })
+            }
+            eventGroupMap.delete(after.id)
+            currentGroup = null
+            data.type = 'new'
+            event.type = 'new'
+          } else if (splitResult.action === 'split_others') {
+            for (const otherId of splitResult.splitEventIds) {
+              const otherHist = recentEvents.get(otherId)
+              if (otherHist) {
+                if (wOld && !wOld.isDestroyed()) {
+                  wOld.webContents.send('frigate-event', {
+                    id: otherId,
+                    type: 'end',
+                    camera: otherHist.camera,
+                    label: otherHist.label,
+                    box: otherHist.boxAbsolute
+                  })
+                }
+                eventGroupMap.delete(otherId)
+                handleEvent({
+                  type: 'new',
+                  after: {
+                    id: otherId,
+                    camera: otherHist.camera,
+                    label: otherHist.label,
+                    box: otherHist.boxAbsolute,
+                    score: otherHist.score
+                  }
+                })
+              }
+            }
+          }
+        }
+      }
+
+      if (!currentGroup) {
+        targetId = grouping.getGroupForNewEvent(
+          event, cameraDetectMap, config, prefs, activeWindows, pendingEvents, eventGroupMap, recentEvents
+        )
+        eventGroupMap.set(after.id, targetId)
+      } else {
+        targetId = currentGroup
+      }
+    }
   }
-  win.webContents.send('frigate-event', event)
+
+  if (closedEvents.has(after.id)) return
+
+  if (data.type === 'update' && !activeWindows.has(targetId) && !pendingEvents.has(targetId)) {
+    data.type = 'new'
+    event.type = 'new'
+  }
+
+  if (data.type === 'new') {
+    if (activeWindows.has(targetId)) {
+      const w = activeWindows.get(targetId)
+      if (w && !w.isDestroyed()) {
+        if (w.isLoading) {
+          w.eventQueue.push(event)
+        } else {
+          w.webContents.send('frigate-event', event)
+        }
+      }
+    } else if (activeWindows.size >= 4) {
+      pendingEvents.set(targetId, event)
+      positionWindows()
+    } else {
+      const w = createEventWindow(targetId)
+      activeWindows.set(targetId, w)
+      positionWindows()
+      w.showInactive()
+      w.eventQueue.push(event)
+      w.webContents.on('did-finish-load', () => {
+        updateAudio()
+      })
+    }
+  } else {
+    if (pendingEvents.has(targetId)) {
+      if (data.type === 'end') {
+        pendingEvents.delete(targetId)
+        markEventClosed(targetId)
+      } else {
+        pendingEvents.set(targetId, event)
+      }
+      positionWindows()
+    } else {
+      const w = activeWindows.get(targetId)
+      if (w && !w.isDestroyed()) {
+        if (w.isLoading) {
+          w.eventQueue.push(event)
+        } else {
+          w.webContents.send('frigate-event', event)
+        }
+      }
+    }
+  }
+
+  recentEvents.set(after.id, {
+    camera: after.camera,
+    label: after.label,
+    box: boxRelative,
+    boxAbsolute: after.box,
+    score: score,
+    time: Date.now()
+  })
+
+  if (Math.random() < 0.05) {
+    const now = Date.now()
+    for (const [id, hist] of recentEvents.entries()) {
+      if (now - hist.time > 60000) recentEvents.delete(id)
+    }
+  }
 }
 
 function startMqtt() {
@@ -436,7 +759,7 @@ function startApp() {
   appStarted = true
   loadPrefs()
   applyOpenAtLogin(prefs.openAtLogin)
-  createWindow()
+  initIndicatorWin()
   createTray()
   initFrigateAuth().then(() => fetchFrigateConfig(frigateToken))
   startMqtt()
@@ -539,7 +862,7 @@ const NOTIFY_THROTTLE_MS = 24 * 60 * 60 * 1000
 async function checkForUpdates(manual) {
   let latest
   try {
-    latest = await updater.getLatest()
+    latest = await updater.getLatest(prefs.updateRepo || undefined)
   } catch (err) {
     if (manual) {
       dialog.showMessageBox({ type: 'error', title: 'Peek', message: 'Could not check for updates.', detail: err.message })
@@ -686,8 +1009,21 @@ app.whenReady().then(() => {
     initFrigateAuth()
   })
 
-  ipcMain.on('overlay-hide', () => {
-    if (win && !win.isDestroyed()) win.hide()
+  ipcMain.on('overlay-hide', (e, eventIds) => {
+    const w = BrowserWindow.fromWebContents(e.sender)
+    if (w && !w.isDestroyed()) {
+      if (Array.isArray(eventIds)) {
+        eventIds.forEach(id => markEventClosed(id))
+      }
+      w.close()
+    }
+  })
+  ipcMain.on('overlay-resize', (e, { width, height }) => {
+    const w = BrowserWindow.fromWebContents(e.sender)
+    if (w && !w.isDestroyed()) {
+      w.dynamicWidth = width
+      positionWindows()
+    }
   })
   ipcMain.on('overlay-open-url', (e, url) => {
     if (typeof url === 'string' && config && config.frigateUrl && url.startsWith(config.frigateUrl)) {
@@ -703,6 +1039,7 @@ app.whenReady().then(() => {
       : []
     return {
       autoUpdate: !!(p && p.autoUpdate),
+      updateRepo: (p && p.updateRepo) || '',
       showDock: !!(p && p.showDock),
       openAtLogin: !!(p && p.openAtLogin),
       clickAction: (p && p.clickAction) || 'event',
@@ -710,6 +1047,9 @@ app.whenReady().then(() => {
       started: appStarted,
       sound: !!(p && p.sound),
       snapshot: !!(p && p.snapshot),
+      cropToObject: !!(p && p.cropToObject),
+      cropRatio: (p && p.cropRatio) || '16:9',
+      highResStream: !!(p && p.highResStream),
       dismissSeconds: p && p.dismissSeconds != null ? p.dismissSeconds : 8,
       showAllObjectsInFrame: p && p.showAllObjectsInFrame !== false,
       showBoundingBoxes: p && p.showBoundingBoxes !== false,
@@ -725,6 +1065,7 @@ app.whenReady().then(() => {
       config = cfg
       startApp()
       prefs.autoUpdate = wantUpdates
+      if (opts && opts.updateRepo !== undefined) prefs.updateRepo = opts.updateRepo
       prefs.showDock = wantDock
       prefs.openAtLogin = wantOpenAtLogin
       savePrefs()
@@ -743,6 +1084,7 @@ app.whenReady().then(() => {
         config.frigatePassword !== cfg.frigatePassword
       const wasUpdates = !!prefs.autoUpdate
       prefs.autoUpdate = wantUpdates
+      if (opts && opts.updateRepo !== undefined) prefs.updateRepo = opts.updateRepo
       prefs.showDock = wantDock
       prefs.openAtLogin = wantOpenAtLogin
       applyRuntimePrefs(opts)

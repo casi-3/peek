@@ -64,8 +64,8 @@ function pickAsset(assets, platform) {
   return names.find(a => /\.appimage$/i.test(a.name)) || null
 }
 
-async function getLatest() {
-  const data = await get(`https://api.github.com/repos/${REPO}/releases/latest`, true)
+async function getLatest(repo = REPO) {
+  const data = await get(`https://api.github.com/repos/${repo}/releases/latest`, true)
   return {
     version: String(data.tag_name || '').replace(/^v/i, ''),
     name: data.name || data.tag_name || '',
