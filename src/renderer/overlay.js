@@ -37,6 +37,13 @@ let activeClickUrl = null
 let stream = null
 let dismissTimer = null
 let timerAnimation = null
+let lastShownEvent = null
+let streamWatchdog = null
+let streamPlaying = false
+let streamFailed = false
+let posterFailed = false
+
+const STREAM_TIMEOUT_MS = 8000
 
 function assignColor(id) {
   if (!colorMap.has(id)) {
@@ -181,6 +188,8 @@ function applyVideoSettings(muted) {
     stream.video.controls = false
     stream.video.disableRemotePlayback = true
     stream.video.addEventListener('playing', () => {
+      streamPlaying = true
+      clearTimeout(streamWatchdog)
       poster.style.opacity = '0'
       const vw = stream.video.videoWidth
       const vh = stream.video.videoHeight
@@ -194,15 +203,24 @@ function applyVideoSettings(muted) {
 
 function startStream(url, muted) {
   stopStream()
+  streamPlaying = false
+  streamFailed = false
   stream = document.createElement('video-stream')
   stream.background = true
   stream.mode = 'webrtc,mse'
   stream.src = url
   videoBox.appendChild(stream)
   applyVideoSettings(muted)
+  streamWatchdog = setTimeout(() => {
+    if (!streamPlaying) {
+      streamFailed = true
+      window.overlay.streamFailed()
+    }
+  }, STREAM_TIMEOUT_MS)
 }
 
 function stopStream() {
+  clearTimeout(streamWatchdog)
   if (stream) {
     stream.ondisconnect()
     stream.remove()
@@ -212,6 +230,7 @@ function stopStream() {
 
 function show(event) {
   clearTimeout(dismissTimer)
+  lastShownEvent = event
 
   const reuseCard = card.classList.contains('show') && event.streamUrl === activeStreamUrl
 
@@ -231,6 +250,7 @@ function show(event) {
 
   if (reuseCard) return
 
+  posterFailed = false
   if (event.poster) {
     poster.style.opacity = '1'
     poster.src = event.poster + (event.poster.includes('?') ? '&' : '?') + 't=' + Date.now()
@@ -281,6 +301,24 @@ window.overlay.onEvent((event) => {
         startTimerBar(event.dismiss)
       }
     }
+  }
+})
+
+poster.addEventListener('error', () => {
+  if (!card.classList.contains('show')) return
+  posterFailed = true
+  window.overlay.streamFailed()
+})
+
+window.overlay.onReauth(() => {
+  if (!card.classList.contains('show') || !lastShownEvent) return
+  if (posterFailed && lastShownEvent.poster) {
+    posterFailed = false
+    poster.style.opacity = '1'
+    poster.src = lastShownEvent.poster + (lastShownEvent.poster.includes('?') ? '&' : '?') + 't=' + Date.now()
+  }
+  if (streamFailed) {
+    startStream(lastShownEvent.streamUrl, !lastShownEvent.sound)
   }
 })
 

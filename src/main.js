@@ -32,10 +32,16 @@ let frigatePin = null
 let frigateToken = null
 let tokenRefreshTimer = null
 let mqttClient = null
+let frigateAvailable = true
+let reauthInFlight = false
+let lastReauthAttempt = 0
 let cameraStreamMap = {}
 let cameraDetectMap = {}
 let certProcSet = false
 const knownCameras = new Set()
+const REAUTH_MIN_INTERVAL_MS = 10000
+const REAUTH_RETRY_DELAY_MS = 5000
+const REAUTH_MAX_RETRIES = 3
 
 const DISMISS_OPTIONS = [
   { label: '3 seconds', value: 3 },
@@ -469,9 +475,17 @@ function handleEvent(data) {
 
 function startMqtt() {
   const prefix = config.topicPrefix || 'frigate'
+  const availableTopic = `${prefix}/available`
   mqttClient = mqtt.connect(config.mqtt, { reconnectPeriod: 3000 })
-  mqttClient.on('connect', () => mqttClient.subscribe(`${prefix}/events`))
+  mqttClient.on('connect', () => {
+    mqttClient.subscribe(`${prefix}/events`)
+    mqttClient.subscribe(availableTopic)
+  })
   mqttClient.on('message', (topic, payload) => {
+    if (topic === availableTopic) {
+      handleFrigateAvailability(payload.toString())
+      return
+    }
     let data
     try {
       data = JSON.parse(payload.toString())
@@ -480,6 +494,12 @@ function startMqtt() {
     }
     handleEvent(data)
   })
+}
+
+function handleFrigateAvailability(status) {
+  const wasAvailable = frigateAvailable
+  frigateAvailable = status === 'online'
+  if (frigateAvailable && !wasAvailable) requestReauth()
 }
 
 function applyCertPin() {
@@ -517,7 +537,7 @@ function scheduleTokenRefresh(token) {
 }
 
 async function initFrigateAuth() {
-  if (!config || !config.frigateUser || !frigateAuth.isHttps(config.frigateUrl)) return
+  if (!config || !config.frigateUser || !frigateAuth.isHttps(config.frigateUrl)) return true
   try {
     const { token, certSha256 } = await frigateAuth.login(config.frigateUrl, config.frigateUser, config.frigatePassword)
     frigateToken = token
@@ -533,9 +553,35 @@ async function initFrigateAuth() {
       sameSite: 'no_restriction'
     })
     scheduleTokenRefresh(token)
+    if (win && !win.isDestroyed()) win.webContents.send('frigate-reauthed')
+    return true
   } catch (err) {
     console.error('[frigate-auth] ' + err.message)
+    return false
   }
+}
+
+function attemptReauth(retriesLeft) {
+  initFrigateAuth().then((ok) => {
+    if (ok) {
+      reauthInFlight = false
+      fetchFrigateConfig(frigateToken)
+      return
+    }
+    if (retriesLeft > 0) {
+      setTimeout(() => attemptReauth(retriesLeft - 1), REAUTH_RETRY_DELAY_MS)
+    } else {
+      reauthInFlight = false
+    }
+  })
+}
+
+function requestReauth() {
+  const now = Date.now()
+  if (reauthInFlight || now - lastReauthAttempt < REAUTH_MIN_INTERVAL_MS) return
+  lastReauthAttempt = now
+  reauthInFlight = true
+  attemptReauth(REAUTH_MAX_RETRIES)
 }
 
 function startApp() {
@@ -794,6 +840,9 @@ app.whenReady().then(() => {
 
   ipcMain.on('overlay-hide', () => {
     if (win && !win.isDestroyed()) win.hide()
+  })
+  ipcMain.on('overlay-stream-failed', () => {
+    requestReauth()
   })
   ipcMain.on('overlay-open-url', (e, url) => {
     if (typeof url === 'string' && config && config.frigateUrl && url.startsWith(config.frigateUrl)) {

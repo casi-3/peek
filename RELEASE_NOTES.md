@@ -1,16 +1,8 @@
-## What's new in v0.4.5
+## What's new in v0.4.6
 
-**Overlay placement**
-- Put the overlay wherever you want, on any monitor. Open the menu bar icon, choose "Set overlay position...", drag the window into place and lock it there.
-- The spot is remembered per display and survives restarts. "Reset overlay position" brings back the default corner.
+**Reliable recovery after a Frigate restart**
+- When Frigate restarts, Peek now notices it come back online and refreshes its login on its own, so snapshots and the live stream keep working instead of showing a broken image or a black box.
+- The refresh retries a few times with a short delay, so it still succeeds when Frigate's web server answers a moment before its backend is ready.
+- If a snapshot or stream fails to load anyway, Peek retries just that piece once the connection is back.
 
-**Camera aspect ratio**
-- The overlay now matches the shape of each camera, so 4:3, 16:9 and 21:9 feeds are shown in full instead of being cropped or stretched.
-- When the overlay is locked in place it grows from its anchored corner, so it never drifts off its spot.
-- Toggle "Match camera aspect ratio" in the menu bar or Settings to keep a fixed size instead.
-
-**Cameras**
-- Cameras are now read straight from your Frigate config, so a newly added camera shows up right away without waiting for its first detection.
-- The camera picker in Settings is now a single multi select list.
-
-Thanks to @carlmozo-sketch and @NickLD for the placement idea, and @sunfirester for the aspect ratio request.
+Thanks to @NickLD for the fix.
