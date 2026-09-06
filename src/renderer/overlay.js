@@ -10,7 +10,12 @@ const LABELS = {
   dog: ['🐕', 'Dog'],
   cat: ['🐈', 'Cat'],
   bird: ['🐦', 'Bird'],
-  package: ['📦', 'Package']
+  package: ['📦', 'Package'],
+  crying: ['😢', 'Crying'],
+  yell: ['📢', 'Yelling'],
+  scream: ['😱', 'Screaming'],
+  speech: ['🗣️', 'Speech'],
+  bark: ['🐕', 'Barking']
 }
 
 const COLORS = ['#ff6b6b', '#51cf66', '#339af0', '#fcc419', '#cc5de8', '#ff922b']

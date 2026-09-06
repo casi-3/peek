@@ -23,6 +23,7 @@
 ## Features
 
 - Live WebRTC feed (sub-second latency) the instant Frigate detects something
+- Also pops up for Frigate audio detections (crying, yelling, etc.), not just tracked objects
 - Shows the detected object, score, recognized face, license plate, and entered zones
 - Optional instant snapshot so there is no black frame while the live feed connects
 - Menu bar app: pick which cameras notify, toggle sound, set the dismiss delay
@@ -35,10 +36,15 @@
 ## How it works
 
 ```
-Frigate ──(MQTT frigate/events)──► main process ──IPC──► overlay window
-   │                                                          │
-   └──(WebRTC via /live/webrtc/api/ws)────────────────────────┘
+Frigate ──(MQTT frigate/events, frigate/audio_detections)──► main process ──IPC──► overlay window
+   │                                                                                   │
+   └──(WebRTC via /live/webrtc/api/ws)───────────────────────────────────────────────┘
 ```
+
+Audio detections (e.g. Frigate's `crying`/`yell`) publish separately from tracked-object
+events, so Peek listens on both topics. Newly seen audio labels appear in the **Audio
+labels** tray menu, where you can enable or disable individual ones per your Frigate
+`audio.listen` config — the same way individual cameras can be toggled.
 
 ## Requirements
 

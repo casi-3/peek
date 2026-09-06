@@ -39,6 +39,8 @@ let cameraStreamMap = {}
 let cameraDetectMap = {}
 let certProcSet = false
 const knownCameras = new Set()
+const knownAudioLabels = new Set()
+let prevAudioData = {}
 const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
 const REAUTH_MAX_RETRIES = 3
@@ -239,6 +241,7 @@ function defaultPrefs() {
   })
   return {
     cameras,
+    audioLabels: {},
     sound: false,
     snapshot: true,
     dismissSeconds: config.dismissSeconds != null ? config.dismissSeconds : 8,
@@ -259,6 +262,7 @@ function loadPrefs() {
   const saved = readPrefs()
   prefs = {
     cameras: Object.assign({}, base.cameras, saved.cameras),
+    audioLabels: Object.assign({}, base.audioLabels, saved.audioLabels),
     sound: saved.sound != null ? saved.sound : base.sound,
     snapshot: saved.snapshot != null ? saved.snapshot : base.snapshot,
     dismissSeconds: saved.dismissSeconds != null ? saved.dismissSeconds : base.dismissSeconds,
@@ -273,6 +277,7 @@ function loadPrefs() {
     lastNotify: saved.lastNotify != null ? saved.lastNotify : base.lastNotify
   }
   Object.keys(prefs.cameras).forEach(c => knownCameras.add(c))
+  Object.keys(prefs.audioLabels).forEach(l => knownAudioLabels.add(l))
 }
 
 function savePrefs() {
@@ -312,16 +317,32 @@ function applyRuntimePrefs(opts) {
       prefs.cameras[name] = !!on
     }
   }
+  if (opts.audioLabels && typeof opts.audioLabels === 'object') {
+    for (const [name, on] of Object.entries(opts.audioLabels)) {
+      prefs.audioLabels[name] = !!on
+    }
+  }
 }
 
 function cameraEnabled(camera) {
   return prefs.cameras[camera] !== false
 }
 
+function audioLabelEnabled(label) {
+  return prefs.audioLabels[label] !== false
+}
+
 function learnCamera(camera) {
   if (knownCameras.has(camera)) return
   knownCameras.add(camera)
   if (prefs.cameras[camera] == null) prefs.cameras[camera] = true
+  buildMenu()
+}
+
+function learnAudioLabel(label) {
+  if (knownAudioLabels.has(label)) return
+  knownAudioLabels.add(label)
+  if (prefs.audioLabels[label] == null) prefs.audioLabels[label] = true
   buildMenu()
 }
 
@@ -339,6 +360,19 @@ function buildMenu() {
     cameraItems.push({ label: 'Waiting for events…', enabled: false })
   }
 
+  const audioLabelItems = [...knownAudioLabels].sort().map(label => ({
+    label: prettyName(label),
+    type: 'checkbox',
+    checked: audioLabelEnabled(label),
+    click: (item) => {
+      prefs.audioLabels[label] = item.checked
+      savePrefs()
+    }
+  }))
+  if (audioLabelItems.length === 0) {
+    audioLabelItems.push({ label: 'Waiting for audio events…', enabled: false })
+  }
+
   const dismissItems = DISMISS_OPTIONS.map(opt => ({
     label: opt.label,
     type: 'radio',
@@ -351,6 +385,7 @@ function buildMenu() {
 
   const menu = Menu.buildFromTemplate([
     { label: 'Cameras', submenu: cameraItems },
+    { label: 'Audio labels', submenu: audioLabelItems },
     {
       label: 'Sound',
       type: 'checkbox',
@@ -473,13 +508,86 @@ function handleEvent(data) {
   win.webContents.send('frigate-event', event)
 }
 
+// Frigate publishes audio detections (e.g. crying, yell, speech) separately
+// from tracked-object events: not on `${prefix}/events`, but as a snapshot of
+// all currently-active camera/label detections on `${prefix}/audio_detections`.
+// Shape: { [camera]: { [label]: { id, score, last_detection } } }
+function emitAudioEvent(type, camera, label, entry) {
+  if (placementMode) return
+  if (!win || win.isDestroyed()) return
+  if (!cameraEnabled(camera)) return
+  if (!audioLabelEnabled(label)) return
+
+  const score = (entry && entry.score) || 0
+  const minScore = config.minScore != null ? config.minScore : 0.6
+  if (type === 'new' && score < minScore) return
+
+  const event = {
+    id: entry.id,
+    type,
+    name: prettyName(camera),
+    label,
+    score,
+    subLabel: null,
+    plate: null,
+    zones: [],
+    box: null,
+    streamUrl: streamUrl(camera),
+    poster: prefs.snapshot ? snapshotUrl(camera) : null,
+    sound: prefs.sound,
+    dismiss: prefs.dismissSeconds,
+    clickUrl: clickUrlForEvent(camera, entry.id),
+    showAllObjectsInFrame: prefs.showAllObjectsInFrame !== false
+  }
+
+  if (type === 'new') {
+    positionWindow()
+    win.showInactive()
+  }
+  win.webContents.send('frigate-event', event)
+}
+
+function handleAudioDetections(data) {
+  const current = data || {}
+  const cameras = new Set([...Object.keys(current), ...Object.keys(prevAudioData)])
+
+  for (const camera of cameras) {
+    learnCamera(camera)
+    const currLabels = current[camera] || {}
+    const prevLabels = prevAudioData[camera] || {}
+    const labels = new Set([...Object.keys(currLabels), ...Object.keys(prevLabels)])
+
+    for (const label of labels) {
+      learnAudioLabel(label)
+      const currEntry = currLabels[label]
+      const prevEntry = prevLabels[label]
+
+      if (currEntry && !prevEntry) {
+        emitAudioEvent('new', camera, label, currEntry)
+      } else if (currEntry && prevEntry && currEntry.id !== prevEntry.id) {
+        emitAudioEvent('end', camera, label, prevEntry)
+        emitAudioEvent('new', camera, label, currEntry)
+      } else if (currEntry && prevEntry && currEntry.score !== prevEntry.score) {
+        emitAudioEvent('update', camera, label, currEntry)
+      } else if (!currEntry && prevEntry) {
+        emitAudioEvent('end', camera, label, prevEntry)
+      }
+    }
+  }
+
+  prevAudioData = current
+}
+
 function startMqtt() {
   const prefix = config.topicPrefix || 'frigate'
   const availableTopic = `${prefix}/available`
+  const eventsTopic = `${prefix}/events`
+  const audioTopic = `${prefix}/audio_detections`
   mqttClient = mqtt.connect(config.mqtt, { reconnectPeriod: 3000 })
   mqttClient.on('connect', () => {
-    mqttClient.subscribe(`${prefix}/events`)
+    mqttClient.subscribe(eventsTopic)
     mqttClient.subscribe(availableTopic)
+    mqttClient.subscribe(audioTopic)
   })
   mqttClient.on('message', (topic, payload) => {
     if (topic === availableTopic) {
@@ -492,7 +600,11 @@ function startMqtt() {
     } catch (err) {
       return
     }
-    handleEvent(data)
+    if (topic === audioTopic) {
+      handleAudioDetections(data)
+    } else {
+      handleEvent(data)
+    }
   })
 }
 
