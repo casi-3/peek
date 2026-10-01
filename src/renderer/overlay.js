@@ -10,7 +10,13 @@ const LABELS = {
   dog: ['🐕', 'Dog'],
   cat: ['🐈', 'Cat'],
   bird: ['🐦', 'Bird'],
-  package: ['📦', 'Package']
+  package: ['📦', 'Package'],
+  crying: ['😢', 'Crying'],
+  yell: ['📢', 'Yelling'],
+  scream: ['😱', 'Screaming'],
+  speech: ['🗣️', 'Speech'],
+  bark: ['🐕', 'Barking'],
+  fire_alarm: ['🚨', 'Fire alarm']
 }
 
 const COLORS = ['#ff6b6b', '#51cf66', '#339af0', '#fcc419', '#cc5de8', '#ff922b']
@@ -162,11 +168,13 @@ function renderDetections() {
     chip.style.borderColor = color
     const name = document.createElement('span')
     name.textContent = labelText(ev.label)
-    const score = document.createElement('span')
-    score.className = 'chip-score'
-    score.textContent = Math.round(ev.score * 100) + '%'
     chip.appendChild(name)
-    chip.appendChild(score)
+    if (ev.score != null) {
+      const score = document.createElement('span')
+      score.className = 'chip-score'
+      score.textContent = Math.round(ev.score * 100) + '%'
+      chip.appendChild(score)
+    }
     detectionsEl.appendChild(chip)
   }
 

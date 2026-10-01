@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/badge/release-v0.4.6-3ddc84" alt="Release" /></a>
+  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/badge/release-v0.4.7-3ddc84" alt="Release" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555" alt="Platforms" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
 </p>
@@ -23,6 +23,7 @@
 ## Features
 
 - Live WebRTC feed (sub-second latency) the instant Frigate detects something
+- Also pops up for Frigate audio detections (crying, yelling, and the like), not just tracked objects
 - Shows the detected object, score, recognized face, license plate, and entered zones
 - Optional instant snapshot so there is no black frame while the live feed connects
 - Menu bar app: pick which cameras notify, toggle sound, set the dismiss delay
@@ -35,10 +36,16 @@
 ## How it works
 
 ```
-Frigate ──(MQTT frigate/events)──► main process ──IPC──► overlay window
-   │                                                          │
-   └──(WebRTC via /live/webrtc/api/ws)────────────────────────┘
+Frigate ──(MQTT frigate/events + frigate/<camera>/audio/<type>)──► main process ──IPC──► overlay window
+   │                                                                                        │
+   └──(WebRTC via /live/webrtc/api/ws)──────────────────────────────────────────────────────┘
 ```
+
+Audio detections publish separately from tracked-object events, on a per camera
+`frigate/<camera>/audio/<type>` topic with an `ON` and `OFF` payload, so Peek listens
+on both. Newly seen audio labels appear in the **Audio labels** tray menu, where you
+can enable or disable individual ones to match your Frigate `audio.listen` config, the
+same way individual cameras can be toggled.
 
 ## Requirements
 

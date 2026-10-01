@@ -39,6 +39,9 @@ let cameraStreamMap = {}
 let cameraDetectMap = {}
 let certProcSet = false
 const knownCameras = new Set()
+const knownAudioLabels = new Set()
+const activeAudio = new Set()
+const AUDIO_NON_LABELS = new Set(['dBFS', 'rms', 'transcription', 'set', 'state'])
 const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
 const REAUTH_MAX_RETRIES = 3
@@ -239,6 +242,7 @@ function defaultPrefs() {
   })
   return {
     cameras,
+    audioLabels: {},
     sound: false,
     snapshot: true,
     dismissSeconds: config.dismissSeconds != null ? config.dismissSeconds : 8,
@@ -259,6 +263,7 @@ function loadPrefs() {
   const saved = readPrefs()
   prefs = {
     cameras: Object.assign({}, base.cameras, saved.cameras),
+    audioLabels: Object.assign({}, base.audioLabels, saved.audioLabels),
     sound: saved.sound != null ? saved.sound : base.sound,
     snapshot: saved.snapshot != null ? saved.snapshot : base.snapshot,
     dismissSeconds: saved.dismissSeconds != null ? saved.dismissSeconds : base.dismissSeconds,
@@ -273,6 +278,7 @@ function loadPrefs() {
     lastNotify: saved.lastNotify != null ? saved.lastNotify : base.lastNotify
   }
   Object.keys(prefs.cameras).forEach(c => knownCameras.add(c))
+  Object.keys(prefs.audioLabels).forEach(l => knownAudioLabels.add(l))
 }
 
 function savePrefs() {
@@ -312,16 +318,32 @@ function applyRuntimePrefs(opts) {
       prefs.cameras[name] = !!on
     }
   }
+  if (opts.audioLabels && typeof opts.audioLabels === 'object') {
+    for (const [name, on] of Object.entries(opts.audioLabels)) {
+      prefs.audioLabels[name] = !!on
+    }
+  }
 }
 
 function cameraEnabled(camera) {
   return prefs.cameras[camera] !== false
 }
 
+function audioLabelEnabled(label) {
+  return prefs.audioLabels[label] !== false
+}
+
 function learnCamera(camera) {
   if (knownCameras.has(camera)) return
   knownCameras.add(camera)
   if (prefs.cameras[camera] == null) prefs.cameras[camera] = true
+  buildMenu()
+}
+
+function learnAudioLabel(label) {
+  if (knownAudioLabels.has(label)) return
+  knownAudioLabels.add(label)
+  if (prefs.audioLabels[label] == null) prefs.audioLabels[label] = true
   buildMenu()
 }
 
@@ -339,6 +361,19 @@ function buildMenu() {
     cameraItems.push({ label: 'Waiting for events…', enabled: false })
   }
 
+  const audioLabelItems = [...knownAudioLabels].sort().map(label => ({
+    label: prettyName(label),
+    type: 'checkbox',
+    checked: audioLabelEnabled(label),
+    click: (item) => {
+      prefs.audioLabels[label] = item.checked
+      savePrefs()
+    }
+  }))
+  if (audioLabelItems.length === 0) {
+    audioLabelItems.push({ label: 'Waiting for audio events…', enabled: false })
+  }
+
   const dismissItems = DISMISS_OPTIONS.map(opt => ({
     label: opt.label,
     type: 'radio',
@@ -351,6 +386,7 @@ function buildMenu() {
 
   const menu = Menu.buildFromTemplate([
     { label: 'Cameras', submenu: cameraItems },
+    { label: 'Audio labels', submenu: audioLabelItems },
     {
       label: 'Sound',
       type: 'checkbox',
@@ -473,6 +509,52 @@ function handleEvent(data) {
   win.webContents.send('frigate-event', event)
 }
 
+function emitAudioEvent(type, camera, label) {
+  if (placementMode) return
+  if (!win || win.isDestroyed()) return
+  if (!cameraEnabled(camera) || !audioLabelEnabled(label)) return
+
+  const id = `audio-${camera}-${label}`
+  const event = {
+    id,
+    type,
+    name: prettyName(camera),
+    label,
+    score: null,
+    subLabel: null,
+    plate: null,
+    zones: [],
+    box: null,
+    streamUrl: streamUrl(camera),
+    poster: prefs.snapshot ? snapshotUrl(camera) : null,
+    sound: prefs.sound,
+    dismiss: prefs.dismissSeconds,
+    clickUrl: clickUrlForEvent(camera, id),
+    showAllObjectsInFrame: prefs.showAllObjectsInFrame !== false
+  }
+
+  if (type === 'new') {
+    positionWindow()
+    win.showInactive()
+  }
+  win.webContents.send('frigate-event', event)
+}
+
+function handleAudioState(camera, label, on) {
+  learnCamera(camera)
+  learnAudioLabel(label)
+  const key = `${camera}/${label}`
+  if (on) {
+    if (activeAudio.has(key)) return
+    activeAudio.add(key)
+    emitAudioEvent('new', camera, label)
+  } else {
+    if (!activeAudio.has(key)) return
+    activeAudio.delete(key)
+    emitAudioEvent('end', camera, label)
+  }
+}
+
 function startMqtt() {
   const prefix = config.topicPrefix || 'frigate'
   const availableTopic = `${prefix}/available`
@@ -480,10 +562,16 @@ function startMqtt() {
   mqttClient.on('connect', () => {
     mqttClient.subscribe(`${prefix}/events`)
     mqttClient.subscribe(availableTopic)
+    mqttClient.subscribe(`${prefix}/+/audio/+`)
   })
   mqttClient.on('message', (topic, payload) => {
     if (topic === availableTopic) {
       handleFrigateAvailability(payload.toString())
+      return
+    }
+    const parts = topic.split('/')
+    if (parts.length === 4 && parts[2] === 'audio' && !AUDIO_NON_LABELS.has(parts[3])) {
+      handleAudioState(parts[1], parts[3], payload.toString().trim() === 'ON')
       return
     }
     let data

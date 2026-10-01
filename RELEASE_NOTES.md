@@ -1,8 +1,7 @@
-## What's new in v0.4.6
+## What's new in v0.4.7
 
-**Reliable recovery after a Frigate restart**
-- When Frigate restarts, Peek now notices it come back online and refreshes its login on its own, so snapshots and the live stream keep working instead of showing a broken image or a black box.
-- The refresh retries a few times with a short delay, so it still succeeds when Frigate's web server answers a moment before its backend is ready.
-- If a snapshot or stream fails to load anyway, Peek retries just that piece once the connection is back.
+**Audio detections**
+- Peek now pops up for Frigate audio detections (crying, yelling, screaming, speech, barking, fire alarm), not just tracked objects, so a baby monitor or a noisy driveway can trigger the overlay too.
+- Newly seen audio labels show up in a new "Audio labels" menu, where you can turn each one on or off to match your Frigate audio.listen config, the same way cameras can be toggled.
 
-Thanks to @NickLD for the fix.
+Thanks to @Lupinixx for raising this.
