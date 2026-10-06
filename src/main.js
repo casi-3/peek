@@ -41,6 +41,7 @@ let certProcSet = false
 const knownCameras = new Set()
 const knownAudioLabels = new Set()
 const activeAudio = new Set()
+const stationaryEvents = new Set()
 const AUDIO_NON_LABELS = new Set(['dBFS', 'rms', 'transcription', 'set', 'state'])
 const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
@@ -250,6 +251,7 @@ function defaultPrefs() {
     showAllObjectsInFrame: true,
     showBoundingBoxes: true,
     dynamicSize: true,
+    dismissOnStationary: true,
     autoUpdate: false,
     showDock: false,
     openAtLogin: false,
@@ -271,6 +273,7 @@ function loadPrefs() {
     showAllObjectsInFrame: saved.showAllObjectsInFrame != null ? saved.showAllObjectsInFrame : base.showAllObjectsInFrame,
     showBoundingBoxes: saved.showBoundingBoxes != null ? saved.showBoundingBoxes : base.showBoundingBoxes,
     dynamicSize: saved.dynamicSize != null ? saved.dynamicSize : base.dynamicSize,
+    dismissOnStationary: saved.dismissOnStationary != null ? saved.dismissOnStationary : base.dismissOnStationary,
     autoUpdate: saved.autoUpdate != null ? saved.autoUpdate : base.autoUpdate,
     showDock: saved.showDock != null ? saved.showDock : base.showDock,
     openAtLogin: saved.openAtLogin != null ? saved.openAtLogin : base.openAtLogin,
@@ -313,6 +316,7 @@ function applyRuntimePrefs(opts) {
       if (win && !win.isDestroyed()) positionWindow()
     }
   }
+  if (typeof opts.dismissOnStationary === 'boolean') prefs.dismissOnStationary = opts.dismissOnStationary
   if (opts.cameras && typeof opts.cameras === 'object') {
     for (const [name, on] of Object.entries(opts.cameras)) {
       prefs.cameras[name] = !!on
@@ -436,6 +440,16 @@ function buildMenu() {
         savePrefs()
       }
     },
+    {
+      label: 'Dismiss when stationary',
+      type: 'checkbox',
+      checked: prefs.dismissOnStationary !== false,
+      click: (item) => {
+        prefs.dismissOnStationary = item.checked
+        if (!item.checked) stationaryEvents.clear()
+        savePrefs()
+      }
+    },
     { label: 'Dismiss after', submenu: dismissItems },
     { type: 'separator' },
     { label: 'Set overlay position…', click: () => enterPlacement() },
@@ -478,14 +492,30 @@ function handleEvent(data) {
   const labels = config.labels || []
   if (labels.length && !labels.includes(after.label)) return
 
+  let type = data.type
+  if (prefs.dismissOnStationary !== false) {
+    if (type === 'end') {
+      stationaryEvents.delete(after.id)
+    } else if (after.stationary === true) {
+      if (stationaryEvents.has(after.id)) return
+      stationaryEvents.add(after.id)
+      type = 'end'
+    } else if (stationaryEvents.has(after.id)) {
+      stationaryEvents.delete(after.id)
+      type = 'new'
+    }
+  } else if (type === 'end') {
+    stationaryEvents.delete(after.id)
+  }
+
   const score = Math.max(after.score || 0, after.top_score || 0)
   const minScore = config.minScore != null ? config.minScore : 0.6
-  if (data.type === 'new' && score < minScore) return
+  if (type === 'new' && score < minScore) return
 
   const subLabel = Array.isArray(after.sub_label) ? after.sub_label[0] : after.sub_label
   const event = {
     id: after.id,
-    type: data.type,
+    type,
     name: prettyName(after.camera),
     label: after.label,
     score,
@@ -502,7 +532,7 @@ function handleEvent(data) {
   }
 
   if (!win || win.isDestroyed()) return
-  if (data.type === 'new') {
+  if (type === 'new') {
     positionWindow()
     win.showInactive()
   }
@@ -689,7 +719,7 @@ function openSetup() {
   }
   setupWin = new BrowserWindow({
     width: 460,
-    height: appStarted ? 1060 : 796,
+    height: appStarted ? 1100 : 796,
     resizable: false,
     fullscreenable: false,
     maximizable: false,
@@ -960,6 +990,7 @@ app.whenReady().then(() => {
       showAllObjectsInFrame: p && p.showAllObjectsInFrame !== false,
       showBoundingBoxes: p && p.showBoundingBoxes !== false,
       dynamicSize: p && p.dynamicSize !== false,
+      dismissOnStationary: p && p.dismissOnStationary !== false,
       cameras
     }
   })

@@ -17,6 +17,7 @@ const fields = {
   showAllObjectsInFrame: el('showAllObjectsInFrame'),
   showBoundingBoxes: el('showBoundingBoxes'),
   dynamicSize: el('dynamicSize'),
+  dismissOnStationary: el('dismissOnStationary'),
   dismiss: el('dismiss'),
   clickAction: el('clickAction')
 }
@@ -144,6 +145,7 @@ function runtimeOpts() {
     showAllObjectsInFrame: fields.showAllObjectsInFrame.checked,
     showBoundingBoxes: fields.showBoundingBoxes.checked,
     dynamicSize: fields.dynamicSize.checked,
+    dismissOnStationary: fields.dismissOnStationary.checked,
     dismissSeconds: Number(fields.dismiss.value),
     clickAction: fields.clickAction.value,
     cameras
@@ -172,6 +174,7 @@ async function init() {
     fields.showAllObjectsInFrame.checked = p.showAllObjectsInFrame !== false
     fields.showBoundingBoxes.checked = p.showBoundingBoxes !== false
     fields.dynamicSize.checked = p.dynamicSize !== false
+    fields.dismissOnStationary.checked = p.dismissOnStationary !== false
     fields.dismiss.value = String(p.dismissSeconds != null ? p.dismissSeconds : 8)
     fields.clickAction.value = (p && p.clickAction) || 'event'
     buildCameraList(p.cameras || [])
