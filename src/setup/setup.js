@@ -2,6 +2,8 @@ const el = (id) => document.getElementById(id)
 const fields = {
   frigateHost: el('frigateHost'),
   frigatePort: el('frigatePort'),
+  frigateHttps: el('frigateHttps'),
+  frigateSelfSigned: el('frigateSelfSigned'),
   frigateUser: el('frigateUser'),
   frigatePass: el('frigatePass'),
   corner: el('corner'),
@@ -46,15 +48,17 @@ function parseMqtt(url) {
 function parseFrigate(url) {
   try {
     const u = new URL(url)
-    return { host: u.hostname, port: u.port || '5000' }
+    const https = u.protocol === 'https:'
+    return { host: u.hostname, port: u.port || (https ? '443' : '5000'), https }
   } catch (err) {
-    return { host: '', port: '5000' }
+    return { host: '', port: '5000', https: false }
   }
 }
 
 function buildConfig() {
   const frigateHost = fields.frigateHost.value.trim().replace(/^\w+:\/\//, '')
-  const frigatePort = fields.frigatePort.value.trim() || '5000'
+  const useHttps = fields.frigateHttps.checked
+  const frigatePort = fields.frigatePort.value.trim() || (useHttps ? '443' : '5000')
   const mqttHost = (fields.mqttHost.value.trim() || frigateHost).replace(/^\w+:\/\//, '')
   const mqttPort = fields.mqttPort.value.trim() || '1883'
   const user = fields.mqttUser.value.trim()
@@ -64,7 +68,7 @@ function buildConfig() {
 
   const frigateUser = fields.frigateUser.value.trim()
   const frigatePass = fields.frigatePass.value
-  const scheme = frigateUser ? 'https' : 'http'
+  const scheme = useHttps ? 'https' : 'http'
 
   const cfg = Object.assign({}, base, {
     mqtt: `mqtt://${auth}${mqttHost}:${mqttPort}`,
@@ -88,7 +92,18 @@ function buildConfig() {
     delete cfg.frigatePassword
   }
 
+  if (useHttps && fields.frigateSelfSigned.checked) {
+    cfg.frigateAllowSelfSigned = true
+  } else {
+    delete cfg.frigateAllowSelfSigned
+  }
+
   return cfg
+}
+
+function updateSelfSignedRow() {
+  const row = el('selfSignedRow')
+  if (row) row.style.display = fields.frigateHttps.checked ? '' : 'none'
 }
 
 function setStatus(kind, text) {
@@ -186,6 +201,8 @@ async function init() {
     const m = parseMqtt(existing.mqtt || '')
     fields.frigateHost.value = f.host
     fields.frigatePort.value = f.port
+    fields.frigateHttps.checked = !!f.https
+    fields.frigateSelfSigned.checked = !!existing.frigateAllowSelfSigned
     fields.frigateUser.value = existing.frigateUser || ''
     fields.frigatePass.value = existing.frigatePassword || ''
     fields.mqttHost.value = m.host
@@ -194,6 +211,7 @@ async function init() {
     fields.mqttPass.value = m.pass
     fields.corner.value = existing.corner || 'top-right'
   }
+  updateSelfSignedRow()
 }
 
 testBtn.addEventListener('click', async () => {
@@ -222,5 +240,7 @@ saveBtn.addEventListener('click', async () => {
 })
 
 cancelBtn.addEventListener('click', () => window.setup.cancel())
+
+fields.frigateHttps.addEventListener('change', updateSelfSignedRow)
 
 init()

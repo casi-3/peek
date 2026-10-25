@@ -24,7 +24,23 @@ function pemToDerSha256(pem) {
   }
 }
 
-function login(frigateUrl, user, password) {
+function certErrorText(err) {
+  const code = err && err.code
+  if (code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' ||
+      code === 'DEPTH_ZERO_SELF_SIGNED_CERT' ||
+      code === 'SELF_SIGNED_CERT_IN_CHAIN') {
+    return 'Frigate certificate is not trusted by this system. Enable "Allow self-signed certificate" if this is expected.'
+  }
+  if (code === 'CERT_HAS_EXPIRED') {
+    return 'Frigate certificate has expired.'
+  }
+  if (code === 'ERR_TLS_CERT_ALTNAME_INVALID' || code === 'HOSTNAME_MISMATCH') {
+    return 'Frigate certificate does not match the host name.'
+  }
+  return null
+}
+
+function login(frigateUrl, user, password, allowSelfSigned) {
   return new Promise((resolve, reject) => {
     let u
     try {
@@ -43,7 +59,7 @@ function login(frigateUrl, user, password) {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(body)
       },
-      rejectUnauthorized: false
+      rejectUnauthorized: !allowSelfSigned
     }, (res) => {
       let certSha256 = null
       try {
@@ -67,14 +83,17 @@ function login(frigateUrl, user, password) {
         }
       })
     })
-    req.on('error', (err) => reject(new Error('Could not reach Frigate: ' + err.message)))
+    req.on('error', (err) => {
+      const certErr = certErrorText(err)
+      reject(new Error(certErr || 'Could not reach Frigate: ' + err.message))
+    })
     req.setTimeout(10000, () => req.destroy(new Error('Frigate login timed out.')))
     req.write(body)
     req.end()
   })
 }
 
-function fetchConfig(frigateUrl, token) {
+function fetchConfig(frigateUrl, token, allowSelfSigned) {
   return new Promise((resolve, reject) => {
     let u
     try {
@@ -91,7 +110,7 @@ function fetchConfig(frigateUrl, token) {
       path: '/api/config',
       method: 'GET',
       headers: token ? { Cookie: 'frigate_token=' + token } : {},
-      rejectUnauthorized: false
+      rejectUnauthorized: !allowSelfSigned
     }, (res) => {
       const chunks = []
       res.on('data', (c) => chunks.push(c))
@@ -103,10 +122,13 @@ function fetchConfig(frigateUrl, token) {
         }
       })
     })
-    req.on('error', reject)
+    req.on('error', (err) => {
+      const certErr = certErrorText(err)
+      reject(certErr ? new Error(certErr) : err)
+    })
     req.setTimeout(10000, () => req.destroy(new Error('Frigate config fetch timed out.')))
     req.end()
   })
 }
 
-module.exports = { login, fetchConfig, isHttps, pemToDerSha256 }
+module.exports = { login, fetchConfig, isHttps, pemToDerSha256, certErrorText }

@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/badge/release-v0.5.1-3ddc84" alt="Release" /></a>
+  <a href="https://github.com/casi-3/peek/releases"><img src="https://img.shields.io/badge/release-v0.6.0-3ddc84" alt="Release" /></a>
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-555" alt="Platforms" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License" /></a>
 </p>
@@ -29,8 +29,8 @@
 - Menu bar app: pick which cameras notify, toggle sound, set the dismiss delay
 - Frameless, always-on-top, translucent card that slides in and out
 - Cross-platform: macOS and Windows
-- Connects to your existing MQTT broker and Frigate — no server-side change
-- Optional support for Frigate's authenticated port (8971) over HTTPS, with certificate pinning
+- Connects to your existing MQTT broker and Frigate, no server-side change
+- Optional HTTPS, including a reverse proxy on port 443; certificates are verified against the system trust store, with an opt-in for self-signed certificates
 - Optional update checks, off by default, with a notification and an installer
 
 ## How it works
@@ -71,9 +71,10 @@ Edit `config.json`:
 | Key | Description |
 | --- | --- |
 | `mqtt` | MQTT connection string, e.g. `mqtt://user:pass@host:1883` |
-| `frigateUrl` | Base URL of Frigate, e.g. `http://host:5000`, or `https://host:8971` for the authenticated port |
+| `frigateUrl` | Base URL of Frigate, e.g. `http://host:5000`, `https://host:8971` for the authenticated port, or `https://host:443` behind a reverse proxy |
 | `frigateUser` | Frigate username for the authenticated port (optional) |
 | `frigatePassword` | Frigate password for the authenticated port (optional) |
+| `frigateAllowSelfSigned` | Accept a certificate your system does not trust (optional, HTTPS only) |
 | `topicPrefix` | Frigate MQTT topic prefix (default `frigate`) |
 | `cameras` | Map of camera name to display name. Leave `{}` to show all cameras |
 | `labels` | Only notify for these labels, e.g. `["person", "car"]`. Empty = all |
@@ -86,12 +87,24 @@ Edit `config.json`:
 When packaged, `config.json` is read from the app's user data folder (use the
 **Open config folder** menu item to locate it).
 
-### Authenticated Frigate
+### HTTPS and authenticated Frigate
 
-If your Frigate uses the authenticated port (usually 8971), add your Frigate
-username and password in the setup window. Peek logs in, pins your Frigate's
-certificate, and loads snapshots and the live stream over HTTPS. Leave the
-fields empty to use the open port 5000.
+Tick **Connect over HTTPS** in the setup window when Frigate is served over
+TLS, for example behind a reverse proxy on port 443, or on Frigate's own
+authenticated port (usually 8971). HTTPS is independent of login: a reverse
+proxy that terminates TLS in front of an otherwise open Frigate needs the
+checkbox but no username.
+
+If your Frigate itself requires login, also add your Frigate username and
+password. Peek then logs in and loads snapshots and the live stream over
+HTTPS. Leave the username and password empty for an open port 5000 or an
+unauthenticated reverse proxy.
+
+Peek verifies HTTPS certificates against your system trust store, so a
+certificate from a certificate authority such as Let's Encrypt works with no
+extra setup and renews freely. If your Frigate uses a self-signed
+certificate, tick **Allow self-signed certificate**; Peek then accepts that
+certificate for your Frigate host.
 
 ### Updates
 

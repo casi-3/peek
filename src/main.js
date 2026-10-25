@@ -89,7 +89,7 @@ function normalizeBox(box, camera) {
 
 async function fetchFrigateConfig(token) {
   try {
-    const frigateConfig = await frigateAuth.fetchConfig(config.frigateUrl, token || null)
+    const frigateConfig = await frigateAuth.fetchConfig(config.frigateUrl, token || null, !!config.frigateAllowSelfSigned)
     buildStreamMap(frigateConfig)
     const cameras = (frigateConfig && frigateConfig.cameras) || {}
     Object.keys(cameras).forEach(name => learnCamera(name))
@@ -625,6 +625,10 @@ function applyCertPin() {
   certProcSet = true
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
     if (frigatePin && request.hostname === frigatePin.host) {
+      if (frigatePin.certSha256 == null) {
+        callback(0)
+        return
+      }
       const sha = frigateAuth.pemToDerSha256(request.certificate && request.certificate.data)
       if (sha && sha === frigatePin.certSha256) {
         callback(0)
@@ -655,9 +659,17 @@ function scheduleTokenRefresh(token) {
 }
 
 async function initFrigateAuth() {
-  if (!config || !config.frigateUser || !frigateAuth.isHttps(config.frigateUrl)) return true
+  if (!config || !frigateAuth.isHttps(config.frigateUrl)) return true
+  const allowSelfSigned = !!config.frigateAllowSelfSigned
+  if (!config.frigateUser) {
+    if (allowSelfSigned) {
+      frigatePin = { host: new URL(config.frigateUrl).hostname, certSha256: null }
+      applyCertPin()
+    }
+    return true
+  }
   try {
-    const { token, certSha256 } = await frigateAuth.login(config.frigateUrl, config.frigateUser, config.frigatePassword)
+    const { token, certSha256 } = await frigateAuth.login(config.frigateUrl, config.frigateUser, config.frigatePassword, allowSelfSigned)
     frigateToken = token
     frigatePin = { host: new URL(config.frigateUrl).hostname, certSha256 }
     applyCertPin()
@@ -771,8 +783,16 @@ async function testConnection(cfg) {
   if (!mqttRes.ok) return mqttRes
   if (cfg.frigateUser && frigateAuth.isHttps(cfg.frigateUrl)) {
     try {
-      await frigateAuth.login(cfg.frigateUrl, cfg.frigateUser, cfg.frigatePassword)
+      await frigateAuth.login(cfg.frigateUrl, cfg.frigateUser, cfg.frigatePassword, !!cfg.frigateAllowSelfSigned)
       return { ok: true, detail: 'MQTT broker and Frigate login OK.' }
+    } catch (err) {
+      return { ok: false, error: 'MQTT OK, but Frigate: ' + err.message }
+    }
+  }
+  if (!cfg.frigateUser && frigateAuth.isHttps(cfg.frigateUrl)) {
+    try {
+      await frigateAuth.fetchConfig(cfg.frigateUrl, null, !!cfg.frigateAllowSelfSigned)
+      return { ok: true, detail: 'MQTT broker and HTTPS Frigate URL OK.' }
     } catch (err) {
       return { ok: false, error: 'MQTT OK, but Frigate: ' + err.message }
     }
@@ -1018,7 +1038,8 @@ app.whenReady().then(() => {
         config.frigateUrl !== cfg.frigateUrl ||
         config.mqtt !== cfg.mqtt ||
         config.frigateUser !== cfg.frigateUser ||
-        config.frigatePassword !== cfg.frigatePassword
+        config.frigatePassword !== cfg.frigatePassword ||
+        !!config.frigateAllowSelfSigned !== !!cfg.frigateAllowSelfSigned
       const wasUpdates = !!prefs.autoUpdate
       prefs.autoUpdate = wantUpdates
       prefs.showDock = wantDock
