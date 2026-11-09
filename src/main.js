@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session, globalShortcut } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { spawn, execFileSync } = require('child_process')
@@ -38,14 +38,20 @@ let lastReauthAttempt = 0
 let cameraStreamMap = {}
 let cameraDetectMap = {}
 let certProcSet = false
+let liveView = null
+let registeredHotkey = null
 const knownCameras = new Set()
 const knownAudioLabels = new Set()
 const activeAudio = new Set()
 const stationaryEvents = new Set()
+const zoneEvents = new Set()
+// Keyed by lower-case zone name, since the same zone name can exist on several cameras.
+const knownZones = new Map()
 const AUDIO_NON_LABELS = new Set(['all', 'dBFS', 'rms', 'transcription', 'set', 'state'])
 const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
 const REAUTH_MAX_RETRIES = 3
+const DEFAULT_LIVE_HOTKEY = 'CommandOrControl+Shift+C'
 
 const DISMISS_OPTIONS = [
   { label: '3 seconds', value: 3 },
@@ -76,6 +82,9 @@ function buildStreamMap(frigateConfig) {
     const detect = cam && cam.detect
     if (detect && detect.width && detect.height) {
       cameraDetectMap[name] = { width: detect.width, height: detect.height }
+    }
+    if (cam && cam.zones && typeof cam.zones === 'object') {
+      Object.keys(cam.zones).forEach(zone => learnZone(zone, name))
     }
   }
 }
@@ -109,12 +118,38 @@ function clickUrlForEvent(camera, eventId) {
   return `${config.frigateUrl}/explore?event_id=${encodeURIComponent(eventId)}`
 }
 
+function titleCase(name) {
+  return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
 function prettyName(camera) {
   if (config.cameras && config.cameras[camera]) return config.cameras[camera]
-  return camera.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  return titleCase(camera)
+}
+
+function overlayDisplay() {
+  const placement = config.placement
+  if (placement && placement.displayId != null) {
+    return screen.getAllDisplays().find(d => d.id === placement.displayId) || screen.getPrimaryDisplay()
+  }
+  return screen.getPrimaryDisplay()
+}
+
+function liveGridSize(count) {
+  const inset = 16
+  const tileHeight = (config.height || 300) - inset
+  const tileWidth = Math.round(tileHeight * 16 / 9)
+  const cols = Math.ceil(Math.sqrt(count))
+  const rows = Math.ceil(count / cols)
+  const width = cols * tileWidth + inset
+  const height = rows * tileHeight + inset
+  const area = overlayDisplay().workArea
+  const scale = Math.min(1, (area.width * 0.9) / width, (area.height * 0.9) / height)
+  return { width: Math.round(width * scale), height: Math.round(height * scale) }
 }
 
 function overlaySize() {
+  if (liveView && liveView.count > 1) return liveGridSize(liveView.count)
   const height = config.height || 300
   if (prefs && prefs.dynamicSize !== false && dynamicWidth) {
     return { width: dynamicWidth, height }
@@ -126,8 +161,7 @@ function positionWindow() {
   const { width, height } = overlaySize()
   const placement = config.placement
   if (placement && placement.displayId != null) {
-    const display = screen.getAllDisplays().find(d => d.id === placement.displayId) || screen.getPrimaryDisplay()
-    const area = display.workArea
+    const area = overlayDisplay().workArea
     const anchorX = placement.anchorX === 'right' ? 'right' : 'left'
     const anchorY = placement.anchorY === 'bottom' ? 'bottom' : 'top'
     let x = anchorX === 'right'
@@ -167,6 +201,10 @@ function setDynamicWidth(aspect) {
 
 function enterPlacement() {
   if (!win || win.isDestroyed()) return
+  if (liveView) {
+    liveView = null
+    win.webContents.send('live-close', { animate: false })
+  }
   placementMode = true
   positionWindow()
   win.setMovable(true)
@@ -255,6 +293,9 @@ function defaultPrefs() {
     autoUpdate: false,
     showDock: false,
     openAtLogin: false,
+    liveHotkey: DEFAULT_LIVE_HOTKEY,
+    liveCameras: {},
+    zoneFilter: [],
     skipVersion: '',
     lastNotify: { version: '', at: 0 }
   }
@@ -277,11 +318,25 @@ function loadPrefs() {
     autoUpdate: saved.autoUpdate != null ? saved.autoUpdate : base.autoUpdate,
     showDock: saved.showDock != null ? saved.showDock : base.showDock,
     openAtLogin: saved.openAtLogin != null ? saved.openAtLogin : base.openAtLogin,
+    liveHotkey: typeof saved.liveHotkey === 'string' ? saved.liveHotkey : base.liveHotkey,
+    liveCameras: Object.assign({}, base.liveCameras, saved.liveCameras),
+    zoneFilter: normalizeZoneFilter(saved.zoneFilter),
     skipVersion: saved.skipVersion != null ? saved.skipVersion : base.skipVersion,
     lastNotify: saved.lastNotify != null ? saved.lastNotify : base.lastNotify
   }
   Object.keys(prefs.cameras).forEach(c => knownCameras.add(c))
   Object.keys(prefs.audioLabels).forEach(l => knownAudioLabels.add(l))
+  prefs.zoneFilter.forEach(z => knownZones.set(z, { name: z, cameras: new Set() }))
+}
+
+function normalizeZoneFilter(list) {
+  if (!Array.isArray(list)) return []
+  return [...new Set(list.filter(z => typeof z === 'string' && z.trim()).map(z => z.trim().toLowerCase()))]
+}
+
+function setZoneFilter(list) {
+  prefs.zoneFilter = normalizeZoneFilter(list)
+  zoneEvents.clear()
 }
 
 function savePrefs() {
@@ -327,6 +382,16 @@ function applyRuntimePrefs(opts) {
       prefs.audioLabels[name] = !!on
     }
   }
+  if (opts.liveCameras && typeof opts.liveCameras === 'object') {
+    for (const [name, on] of Object.entries(opts.liveCameras)) {
+      prefs.liveCameras[name] = !!on
+    }
+  }
+  if (Array.isArray(opts.zoneFilter)) setZoneFilter(opts.zoneFilter)
+  if (typeof opts.liveHotkey === 'string' && opts.liveHotkey !== prefs.liveHotkey) {
+    prefs.liveHotkey = opts.liveHotkey
+    applyHotkey(prefs.liveHotkey)
+  }
 }
 
 function cameraEnabled(camera) {
@@ -335,6 +400,85 @@ function cameraEnabled(camera) {
 
 function audioLabelEnabled(label) {
   return prefs.audioLabels[label] !== false
+}
+
+function liveCameraEnabled(camera) {
+  return prefs.liveCameras[camera] !== false
+}
+
+function liveClickUrl(camera) {
+  return prefs.clickAction === 'disabled' ? null : `${config.frigateUrl}/#${camera}`
+}
+
+function openLiveView() {
+  if (placementMode || !win || win.isDestroyed()) return
+  const cameras = [...knownCameras].sort().filter(liveCameraEnabled)
+  if (!cameras.length) {
+    if (Notification.isSupported()) {
+      new Notification({ title: 'Peek', body: 'No cameras for live view yet. Pick some under Live view cameras.' }).show()
+    }
+    return
+  }
+  liveView = { count: cameras.length }
+  positionWindow()
+  win.showInactive()
+  win.webContents.send('live-open', {
+    muted: cameras.length > 1 || !prefs.sound,
+    cameras: cameras.map(camera => ({
+      id: camera,
+      name: prettyName(camera),
+      streamUrl: streamUrl(camera),
+      poster: prefs.snapshot ? snapshotUrl(camera) : null,
+      clickUrl: liveClickUrl(camera)
+    }))
+  })
+}
+
+function toggleLiveView() {
+  if (liveView) {
+    if (win && !win.isDestroyed()) win.webContents.send('live-close', { animate: true })
+    return
+  }
+  openLiveView()
+}
+
+function applyHotkey(accelerator) {
+  if (registeredHotkey) {
+    globalShortcut.unregister(registeredHotkey)
+    registeredHotkey = null
+  }
+  if (accelerator) {
+    try {
+      if (globalShortcut.register(accelerator, toggleLiveView)) {
+        registeredHotkey = accelerator
+      } else {
+        console.error('[peek] live view shortcut ' + accelerator + ' is in use by another app')
+      }
+    } catch (err) {
+      console.error('[peek] invalid live view shortcut ' + accelerator + ': ' + err.message)
+    }
+  }
+  buildMenu()
+  return registeredHotkey === accelerator
+}
+
+// The setup window suspends our own shortcut while it captures keys, so this probe
+// only fails when another app holds the combination or the accelerator is invalid.
+function hotkeyAvailable(accelerator) {
+  if (!accelerator) return true
+  try {
+    const ok = globalShortcut.register(accelerator, () => {})
+    if (ok) globalShortcut.unregister(accelerator)
+    return ok
+  } catch (err) {
+    return false
+  }
+}
+
+function revealOverlay() {
+  liveView = null
+  positionWindow()
+  win.showInactive()
 }
 
 function learnCamera(camera) {
@@ -348,6 +492,47 @@ function learnAudioLabel(label) {
   if (knownAudioLabels.has(label)) return
   knownAudioLabels.add(label)
   if (prefs.audioLabels[label] == null) prefs.audioLabels[label] = true
+  buildMenu()
+}
+
+function learnZone(zone, camera) {
+  if (typeof zone !== 'string' || !zone) return
+  const key = zone.toLowerCase()
+  let entry = knownZones.get(key)
+  let changed = false
+  if (!entry) {
+    entry = { name: zone, cameras: new Set() }
+    knownZones.set(key, entry)
+    changed = true
+  } else if (entry.name === key && zone !== key) {
+    // A zone restored from saved prefs only knows its lower-case key until Frigate reports the real name.
+    entry.name = zone
+    changed = true
+  }
+  if (camera && !entry.cameras.has(camera)) {
+    entry.cameras.add(camera)
+    changed = true
+  }
+  if (changed) buildMenu()
+}
+
+function zoneLabel(key) {
+  const entry = knownZones.get(key)
+  const name = titleCase((entry && entry.name) || key)
+  const cameras = entry ? [...entry.cameras].sort().map(prettyName) : []
+  return cameras.length ? `${name} (${cameras.join(', ')})` : name
+}
+
+function eventInSelectedZone(after) {
+  const zones = [...(after.current_zones || []), ...(after.entered_zones || [])]
+  return zones.some(z => typeof z === 'string' && prefs.zoneFilter.includes(z.toLowerCase()))
+}
+
+function toggleZone(key, on) {
+  const next = prefs.zoneFilter.filter(z => z !== key)
+  if (on) next.push(key)
+  setZoneFilter(next)
+  savePrefs()
   buildMenu()
 }
 
@@ -378,6 +563,42 @@ function buildMenu() {
     audioLabelItems.push({ label: 'Waiting for audio events…', enabled: false })
   }
 
+  const liveCameraItems = [...knownCameras].sort().map(camera => ({
+    label: prettyName(camera),
+    type: 'checkbox',
+    checked: liveCameraEnabled(camera),
+    click: (item) => {
+      prefs.liveCameras[camera] = item.checked
+      savePrefs()
+    }
+  }))
+  if (liveCameraItems.length === 0) {
+    liveCameraItems.push({ label: 'Waiting for cameras…', enabled: false })
+  }
+
+  const zoneItems = [
+    {
+      label: 'Anywhere (no zone filter)',
+      type: 'checkbox',
+      checked: prefs.zoneFilter.length === 0,
+      click: () => {
+        setZoneFilter([])
+        savePrefs()
+        buildMenu()
+      }
+    },
+    { type: 'separator' },
+    ...[...knownZones.keys()].sort().map(key => ({
+      label: zoneLabel(key),
+      type: 'checkbox',
+      checked: prefs.zoneFilter.includes(key),
+      click: (item) => toggleZone(key, item.checked)
+    }))
+  ]
+  if (knownZones.size === 0) {
+    zoneItems.push({ label: 'No zones found in Frigate', enabled: false })
+  }
+
   const dismissItems = DISMISS_OPTIONS.map(opt => ({
     label: opt.label,
     type: 'radio',
@@ -391,6 +612,7 @@ function buildMenu() {
   const menu = Menu.buildFromTemplate([
     { label: 'Cameras', submenu: cameraItems },
     { label: 'Audio labels', submenu: audioLabelItems },
+    { label: 'Only pop up in zones', submenu: zoneItems },
     {
       label: 'Sound',
       type: 'checkbox',
@@ -452,6 +674,14 @@ function buildMenu() {
     },
     { label: 'Dismiss after', submenu: dismissItems },
     { type: 'separator' },
+    {
+      label: 'Show live view',
+      accelerator: registeredHotkey || undefined,
+      registerAccelerator: false,
+      click: () => toggleLiveView()
+    },
+    { label: 'Live view cameras', submenu: liveCameraItems },
+    { type: 'separator' },
     { label: 'Set overlay position…', click: () => enterPlacement() },
     ...(config && config.placement ? [{ label: 'Reset overlay position', click: () => resetPlacement() }] : []),
     { type: 'separator' },
@@ -492,7 +722,22 @@ function handleEvent(data) {
   const labels = config.labels || []
   if (labels.length && !labels.includes(after.label)) return
 
+  ;[...(after.current_zones || []), ...(after.entered_zones || [])].forEach(z => learnZone(z, after.camera))
+
   let type = data.type
+  let zoneEntered = false
+  if (prefs.zoneFilter.length) {
+    if (zoneEvents.has(after.id)) {
+      if (type === 'end') zoneEvents.delete(after.id)
+    } else {
+      // Frigate usually reports an object before it reaches a zone, so the first
+      // update that puts it inside a chosen zone is what pops the card up.
+      if (type === 'end' || !eventInSelectedZone(after)) return
+      type = 'new'
+      zoneEntered = true
+    }
+  }
+
   if (prefs.dismissOnStationary !== false) {
     if (type === 'end') {
       stationaryEvents.delete(after.id)
@@ -511,6 +756,8 @@ function handleEvent(data) {
   const score = Math.max(after.score || 0, after.top_score || 0)
   const minScore = config.minScore != null ? config.minScore : 0.6
   if (type === 'new' && score < minScore) return
+  // Only remember the zone match once the event really shows, so a low score can retry on a later update.
+  if (zoneEntered) zoneEvents.add(after.id)
 
   const subLabel = Array.isArray(after.sub_label) ? after.sub_label[0] : after.sub_label
   const event = {
@@ -532,10 +779,7 @@ function handleEvent(data) {
   }
 
   if (!win || win.isDestroyed()) return
-  if (type === 'new') {
-    positionWindow()
-    win.showInactive()
-  }
+  if (type === 'new') revealOverlay()
   win.webContents.send('frigate-event', event)
 }
 
@@ -543,6 +787,8 @@ function emitAudioEvent(type, camera, label) {
   if (placementMode) return
   if (!win || win.isDestroyed()) return
   if (!cameraEnabled(camera) || !audioLabelEnabled(label)) return
+  // Audio detections carry no zone, so a zone filter rules them out.
+  if (type === 'new' && prefs.zoneFilter.length) return
 
   const id = `audio-${camera}-${label}`
   const event = {
@@ -563,10 +809,7 @@ function emitAudioEvent(type, camera, label) {
     showAllObjectsInFrame: prefs.showAllObjectsInFrame !== false
   }
 
-  if (type === 'new') {
-    positionWindow()
-    win.showInactive()
-  }
+  if (type === 'new') revealOverlay()
   win.webContents.send('frigate-event', event)
 }
 
@@ -720,6 +963,7 @@ function startApp() {
   applyOpenAtLogin(prefs.openAtLogin)
   createWindow()
   createTray()
+  applyHotkey(prefs.liveHotkey)
   initFrigateAuth().then(() => fetchFrigateConfig(frigateToken))
   startMqtt()
 }
@@ -748,6 +992,9 @@ function openSetup() {
   setupWin.on('closed', () => {
     const wasStarted = appStarted
     setupWin = null
+    if (registeredHotkey && !globalShortcut.isRegistered(registeredHotkey)) {
+      globalShortcut.register(registeredHotkey, toggleLiveView)
+    }
     if (!wasStarted) app.quit()
   })
 }
@@ -977,6 +1224,7 @@ app.whenReady().then(() => {
   })
 
   ipcMain.on('overlay-hide', () => {
+    liveView = null
     if (win && !win.isDestroyed()) win.hide()
   })
   ipcMain.on('overlay-stream-failed', () => {
@@ -997,6 +1245,9 @@ app.whenReady().then(() => {
     const cameras = appStarted
       ? [...knownCameras].sort().map(name => ({ name, label: prettyName(name), enabled: cameraEnabled(name) }))
       : []
+    const liveCameras = appStarted
+      ? [...knownCameras].sort().map(name => ({ name, label: prettyName(name), enabled: liveCameraEnabled(name) }))
+      : []
     return {
       autoUpdate: !!(p && p.autoUpdate),
       showDock: !!(p && p.showDock),
@@ -1011,7 +1262,12 @@ app.whenReady().then(() => {
       showBoundingBoxes: p && p.showBoundingBoxes !== false,
       dynamicSize: p && p.dynamicSize !== false,
       dismissOnStationary: p && p.dismissOnStationary !== false,
-      cameras
+      liveHotkey: p && typeof p.liveHotkey === 'string' ? p.liveHotkey : DEFAULT_LIVE_HOTKEY,
+      cameras,
+      liveCameras,
+      zones: appStarted
+        ? [...knownZones.keys()].sort().map(key => ({ name: key, label: zoneLabel(key), enabled: prefs.zoneFilter.includes(key) }))
+        : []
     }
   })
   ipcMain.handle('setup-save', (e, cfg, opts) => {
@@ -1063,6 +1319,15 @@ app.whenReady().then(() => {
     }
     return { ok: true }
   })
+  ipcMain.handle('setup-check-hotkey', (e, accelerator) => hotkeyAvailable(accelerator))
+  ipcMain.on('setup-hotkey-capture', (e, capturing) => {
+    if (!appStarted || !registeredHotkey) return
+    if (capturing) {
+      globalShortcut.unregister(registeredHotkey)
+    } else if (!globalShortcut.isRegistered(registeredHotkey)) {
+      globalShortcut.register(registeredHotkey, toggleLiveView)
+    }
+  })
   ipcMain.on('setup-cancel', () => {
     if (setupWin && !setupWin.isDestroyed()) setupWin.close()
   })
@@ -1090,3 +1355,4 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {})
+app.on('will-quit', () => globalShortcut.unregisterAll())

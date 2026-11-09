@@ -159,6 +159,21 @@ select {
   display: none;
 }
 
+.hotkey {
+  display: flex;
+  gap: 8px;
+}
+
+.hotkey input {
+  flex: 1;
+  cursor: pointer;
+  caret-color: transparent;
+}
+
+.hint.err {
+  color: #ff8585;
+}
+
 .check {
   display: flex;
   align-items: center;
