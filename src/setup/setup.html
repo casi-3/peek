@@ -84,12 +84,12 @@
       <h2>Notifications</h2>
       <div class="row">
         <label for="cameraList">Cameras</label>
-        <select id="cameraList" class="camera-list" multiple></select>
+        <div id="cameraList" class="camera-list" role="listbox" aria-multiselectable="true"></div>
         <span class="hint">Selected cameras show notifications. Click to toggle each one.</span>
       </div>
       <div class="row">
         <label for="zoneList">Only pop up in these zones</label>
-        <select id="zoneList" class="camera-list" multiple></select>
+        <div id="zoneList" class="camera-list" role="listbox" aria-multiselectable="true"></div>
         <span class="hint">Leave all unselected to pop up anywhere. With a zone selected, objects pop up only once they enter it, and audio detections stop because they have no zone.</span>
       </div>
       <label class="check">
@@ -149,7 +149,7 @@
       </div>
       <div class="row">
         <label for="liveCameraList">Cameras</label>
-        <select id="liveCameraList" class="camera-list" multiple></select>
+        <div id="liveCameraList" class="camera-list" role="listbox" aria-multiselectable="true"></div>
         <span class="hint">One camera opens a single feed. Several open a grid. A new detection replaces the live view.</span>
       </div>
     </section>

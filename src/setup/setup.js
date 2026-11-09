@@ -123,38 +123,48 @@ function valid() {
 function buildCameraList(container, cameras, emptyText) {
   container.innerHTML = ''
   if (!cameras.length) {
-    const opt = document.createElement('option')
-    opt.disabled = true
-    opt.textContent = emptyText || 'Waiting for events…'
-    container.appendChild(opt)
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = emptyText || 'Waiting for events…'
+    container.appendChild(empty)
     return
   }
   for (const cam of cameras) {
-    const opt = document.createElement('option')
-    opt.value = cam.name
+    const opt = document.createElement('div')
+    opt.setAttribute('role', 'option')
+    opt.tabIndex = 0
+    opt.dataset.value = cam.name
     opt.textContent = cam.label || cam.name
-    opt.selected = cam.enabled !== false
+    opt.setAttribute('aria-selected', String(cam.enabled !== false))
     container.appendChild(opt)
   }
 }
 
-function toggleOnClick(e) {
-  const opt = e.target
-  if (opt.tagName !== 'OPTION' || opt.disabled) return
-  e.preventDefault()
-  opt.selected = !opt.selected
-  opt.parentNode.focus()
+// A plain div list, not a native multi-select: Chromium scrolls a multi-select
+// back to its first selected option after every toggle.
+function toggleOption(opt) {
+  opt.setAttribute('aria-selected', String(opt.getAttribute('aria-selected') !== 'true'))
 }
 
-el('cameraList').addEventListener('mousedown', toggleOnClick)
-el('liveCameraList').addEventListener('mousedown', toggleOnClick)
-el('zoneList').addEventListener('mousedown', toggleOnClick)
+for (const id of ['cameraList', 'liveCameraList', 'zoneList']) {
+  const list = el(id)
+  list.addEventListener('click', e => {
+    const opt = e.target.closest('[role="option"]')
+    if (opt) toggleOption(opt)
+  })
+  list.addEventListener('keydown', e => {
+    if (e.key !== ' ' && e.key !== 'Enter') return
+    const opt = e.target.closest('[role="option"]')
+    if (!opt) return
+    e.preventDefault()
+    toggleOption(opt)
+  })
+}
 
 function selectedCameras(container) {
   const cameras = {}
-  Array.from(container.options).forEach(opt => {
-    if (opt.disabled) return
-    cameras[opt.value] = opt.selected
+  container.querySelectorAll('[role="option"]').forEach(opt => {
+    cameras[opt.dataset.value] = opt.getAttribute('aria-selected') === 'true'
   })
   return cameras
 }
