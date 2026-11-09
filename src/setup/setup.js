@@ -120,13 +120,12 @@ function valid() {
   return fields.frigateHost.value.trim().length > 0
 }
 
-function buildCameraList(cameras) {
-  const container = el('cameraList')
+function buildCameraList(container, cameras, emptyText) {
   container.innerHTML = ''
   if (!cameras.length) {
     const opt = document.createElement('option')
     opt.disabled = true
-    opt.textContent = 'Waiting for events…'
+    opt.textContent = emptyText || 'Waiting for events…'
     container.appendChild(opt)
     return
   }
@@ -139,22 +138,133 @@ function buildCameraList(cameras) {
   }
 }
 
-el('cameraList').addEventListener('mousedown', (e) => {
+function toggleOnClick(e) {
   const opt = e.target
   if (opt.tagName !== 'OPTION' || opt.disabled) return
   e.preventDefault()
   opt.selected = !opt.selected
   opt.parentNode.focus()
+}
+
+el('cameraList').addEventListener('mousedown', toggleOnClick)
+el('liveCameraList').addEventListener('mousedown', toggleOnClick)
+el('zoneList').addEventListener('mousedown', toggleOnClick)
+
+function selectedCameras(container) {
+  const cameras = {}
+  Array.from(container.options).forEach(opt => {
+    if (opt.disabled) return
+    cameras[opt.value] = opt.selected
+  })
+  return cameras
+}
+
+const hotkeyInput = el('liveHotkey')
+const hotkeyHint = el('liveHotkeyHint')
+const hotkeyHintText = hotkeyHint.textContent
+let platform = ''
+let liveHotkey = ''
+
+const NAMED_KEYS = {
+  Space: 'Space',
+  ArrowUp: 'Up',
+  ArrowDown: 'Down',
+  ArrowLeft: 'Left',
+  ArrowRight: 'Right',
+  Home: 'Home',
+  End: 'End',
+  PageUp: 'PageUp',
+  PageDown: 'PageDown',
+  Insert: 'Insert'
+}
+
+function acceleratorKey(code) {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3)
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5)
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code
+  return NAMED_KEYS[code] || null
+}
+
+function formatHotkey(accelerator) {
+  if (!accelerator) return ''
+  const mac = platform === 'darwin'
+  const names = {
+    CommandOrControl: mac ? 'Cmd' : 'Ctrl',
+    CmdOrCtrl: mac ? 'Cmd' : 'Ctrl',
+    Command: 'Cmd',
+    Control: 'Ctrl',
+    Super: 'Win'
+  }
+  return accelerator.split('+').map(part => names[part] || part).join(' + ')
+}
+
+function setHotkeyHint(text, isError) {
+  hotkeyHint.textContent = text
+  hotkeyHint.classList.toggle('err', !!isError)
+}
+
+function setHotkey(accelerator) {
+  liveHotkey = accelerator
+  hotkeyInput.value = formatHotkey(accelerator)
+}
+
+hotkeyInput.addEventListener('focus', () => {
+  window.setup.captureHotkey(true)
+  setHotkeyHint('Press the new key combination. Esc keeps the current one.')
+})
+
+hotkeyInput.addEventListener('blur', () => {
+  window.setup.captureHotkey(false)
+  if (!hotkeyHint.classList.contains('err')) setHotkeyHint(hotkeyHintText)
+})
+
+hotkeyInput.addEventListener('keydown', async (e) => {
+  e.preventDefault()
+  if (e.key === 'Escape') {
+    hotkeyInput.blur()
+    return
+  }
+  if (e.key === 'Tab') return
+  const key = acceleratorKey(e.code)
+  const parts = []
+  if (platform === 'darwin') {
+    if (e.metaKey) parts.push('Command')
+    if (e.ctrlKey) parts.push('Control')
+  } else {
+    if (e.ctrlKey) parts.push('Ctrl')
+    if (e.metaKey) parts.push('Super')
+  }
+  if (e.altKey) parts.push('Alt')
+  const hasModifier = parts.length > 0
+  if (e.shiftKey) parts.push('Shift')
+  if (!key) return
+  // Shift alone would swallow normal typing system-wide, so require Ctrl, Alt or the OS key unless it is an F key.
+  if (!hasModifier && !/^F\d+$/.test(key)) {
+    setHotkeyHint('Add Ctrl, Alt or ' + (platform === 'darwin' ? 'Cmd' : 'Win') + ' to the key.', true)
+    return
+  }
+  const accelerator = [...parts, key].join('+')
+  const ok = await window.setup.checkHotkey(accelerator)
+  if (!ok) {
+    setHotkeyHint(formatHotkey(accelerator) + ' is taken by another app. Try another one.', true)
+    return
+  }
+  setHotkey(accelerator)
+  setHotkeyHint('Saved when you click Save.')
+})
+
+el('liveHotkeyClear').addEventListener('click', () => {
+  setHotkey('')
+  setHotkeyHint('No shortcut. Use Show live view in the tray menu instead.')
 })
 
 function runtimeOpts() {
   if (!started) return {}
-  const cameras = {}
-  Array.from(el('cameraList').options).forEach(opt => {
-    if (opt.disabled) return
-    cameras[opt.value] = opt.selected
-  })
+  const cameras = selectedCameras(el('cameraList'))
   return {
+    liveHotkey,
+    liveCameras: selectedCameras(el('liveCameraList')),
+    zoneFilter: Object.entries(selectedCameras(el('zoneList'))).filter(([, on]) => on).map(([name]) => name),
     sound: fields.sound.checked,
     snapshot: fields.snapshot.checked,
     showAllObjectsInFrame: fields.showAllObjectsInFrame.checked,
@@ -169,6 +279,7 @@ function runtimeOpts() {
 
 async function init() {
   const p = await window.setup.loadPrefs()
+  platform = (p && p.platform) || ''
   fields.autoUpdate.checked = !!(p && p.autoUpdate)
   fields.openAtLogin.checked = !!(p && p.openAtLogin)
   fields.showDock.checked = !!(p && p.showDock)
@@ -192,7 +303,11 @@ async function init() {
     fields.dismissOnStationary.checked = p.dismissOnStationary !== false
     fields.dismiss.value = String(p.dismissSeconds != null ? p.dismissSeconds : 8)
     fields.clickAction.value = (p && p.clickAction) || 'event'
-    buildCameraList(p.cameras || [])
+    buildCameraList(el('cameraList'), p.cameras || [])
+    buildCameraList(el('zoneList'), p.zones || [], 'No zones found in Frigate')
+    el('liveSection').classList.remove('hidden')
+    buildCameraList(el('liveCameraList'), p.liveCameras || [])
+    setHotkey(p.liveHotkey || '')
   }
   const existing = await window.setup.load()
   if (existing) {

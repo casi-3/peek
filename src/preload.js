@@ -9,5 +9,8 @@ contextBridge.exposeInMainWorld('overlay', {
   onMode: (callback) => ipcRenderer.on('overlay-mode', (event, mode) => callback(mode)),
   lockPlacement: () => ipcRenderer.send('placement-save'),
   cancelPlacement: () => ipcRenderer.send('placement-cancel'),
-  resize: (aspect) => ipcRenderer.send('overlay-resize', aspect)
+  resize: (aspect) => ipcRenderer.send('overlay-resize', aspect),
+  onLiveOpen: (callback) => ipcRenderer.on('live-open', (event, data) => callback(data)),
+  onDismiss: (callback) => ipcRenderer.on('overlay-dismiss', () => callback()),
+  onLiveClose: (callback) => ipcRenderer.on('live-close', (event, opts) => callback(opts || {}))
 })

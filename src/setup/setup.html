@@ -87,6 +87,11 @@
         <select id="cameraList" class="camera-list" multiple></select>
         <span class="hint">Selected cameras show notifications. Click to toggle each one.</span>
       </div>
+      <div class="row">
+        <label for="zoneList">Only pop up in these zones</label>
+        <select id="zoneList" class="camera-list" multiple></select>
+        <span class="hint">Leave all unselected to pop up anywhere. With a zone selected, objects pop up only once they enter it, and audio detections stop because they have no zone.</span>
+      </div>
       <label class="check">
         <input id="sound" type="checkbox" />
         <span class="check-text">Play sound on detection</span>
@@ -129,6 +134,23 @@
           <option value="live">Open live stream</option>
           <option value="disabled">Do nothing</option>
         </select>
+      </div>
+    </section>
+
+    <section id="liveSection" class="hidden">
+      <h2>Live view</h2>
+      <div class="row">
+        <label for="liveHotkey">Keyboard shortcut</label>
+        <div class="hotkey">
+          <input id="liveHotkey" type="text" readonly placeholder="None" />
+          <button id="liveHotkeyClear" class="ghost" type="button">Clear</button>
+        </div>
+        <span class="hint" id="liveHotkeyHint">Click the box, then press the keys. Works from any app and opens or closes the live view.</span>
+      </div>
+      <div class="row">
+        <label for="liveCameraList">Cameras</label>
+        <select id="liveCameraList" class="camera-list" multiple></select>
+        <span class="hint">One camera opens a single feed. Several open a grid. A new detection replaces the live view.</span>
       </div>
     </section>
 

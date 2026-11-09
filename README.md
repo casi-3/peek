@@ -27,6 +27,8 @@
 - Shows the detected object, score, recognized face, license plate, and entered zones
 - Optional instant snapshot so there is no black frame while the live feed connects
 - Menu bar app: pick which cameras notify, toggle sound, set the dismiss delay
+- Pause pop-ups for 30 minutes, 1, 3 or 6 hours, or the rest of the day
+- Global keyboard shortcut (default `Ctrl+Alt+Z`) opens a live view of one camera or a grid of several, on demand
 - Frameless, always-on-top, translucent card that slides in and out
 - Cross-platform: macOS and Windows
 - Connects to your existing MQTT broker and Frigate, no server-side change
@@ -105,6 +107,52 @@ certificate from a certificate authority such as Let's Encrypt works with no
 extra setup and renews freely. If your Frigate uses a self-signed
 certificate, tick **Allow self-signed certificate**; Peek then accepts that
 certificate for your Frigate host.
+
+### Zone filter
+
+To pop up only for objects in certain Frigate zones, such as a driveway, pick
+them under **Only pop up in zones** in the tray menu, or in **Settings…** under
+**Notifications**. Peek lists the zones from your Frigate config.
+
+- With no zone picked, Peek pops up anywhere, as before.
+- With zones picked, an object pops up the moment it enters one of them, even if
+  Frigate first saw it somewhere else.
+- Zone names match regardless of case, and a name shared by several cameras
+  counts for all of them.
+- Audio detections have no zone, so they stop popping up while a zone filter is
+  set.
+
+### Pausing pop-ups
+
+Pick a time under **Pause pop-ups** at the top of the tray menu: 30 minutes,
+1 hour, 3 hours, 6 hours or **Rest of today** (until midnight). A card on
+screen slides away, and the menu shows when pop-ups come back.
+
+- Pick **Resume pop-ups** to end the pause early, or pick another time to
+  replace it.
+- The pause covers object and audio detections. The live view shortcut still
+  works.
+- The pause survives a restart of Peek.
+
+### Live view shortcut
+
+Press `Ctrl+Alt+Z` (`Cmd+Option+Z` on macOS) from any app to open a live view
+without waiting for a detection. Press it again, or click the close button, to
+hide it. The shortcut is also on the tray menu as **Show live view**.
+
+- Pick the cameras under **Live view cameras** in the tray menu, or in
+  **Settings…** under **Live view**. One camera opens a single feed; several
+  open a grid sized to fit your screen.
+- Change or clear the shortcut in **Settings…**: click the shortcut box and
+  press the new keys. Peek warns you if another app already holds them.
+- A new detection replaces the live view with the usual notification card.
+- Clicking a tile opens that camera in Frigate, unless **Click notification to**
+  is set to **Do nothing**.
+
+The shortcut is global, so while Peek runs it takes that key combination away
+from every other app. On keyboard layouts where `Ctrl+Alt` acts as `AltGr`,
+`Ctrl+Alt+Z` may type a character (for example `ż` on Polish layouts); pick
+another combination if so.
 
 ### Updates
 

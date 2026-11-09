@@ -34,6 +34,7 @@ const closeBtn = document.getElementById('close')
 const placementEl = document.getElementById('placement')
 const placementLock = document.getElementById('placement-lock')
 const placementCancel = document.getElementById('placement-cancel')
+const gridEl = document.getElementById('grid')
 
 const activeEvents = new Map()
 const colorMap = new Map()
@@ -48,6 +49,8 @@ let streamWatchdog = null
 let streamPlaying = false
 let streamFailed = false
 let posterFailed = false
+let hideTimer = null
+let liveTiles = []
 
 const STREAM_TIMEOUT_MS = 8000
 
@@ -189,36 +192,39 @@ function renderDetections() {
   infoEl.style.display = extras.length ? 'block' : 'none'
 }
 
-function applyVideoSettings(muted) {
-  if (!stream) return
-  if (stream.video) {
-    stream.video.muted = muted
-    stream.video.controls = false
-    stream.video.disableRemotePlayback = true
-    stream.video.addEventListener('playing', () => {
-      streamPlaying = true
-      clearTimeout(streamWatchdog)
-      poster.style.opacity = '0'
-      const vw = stream.video.videoWidth
-      const vh = stream.video.videoHeight
-      if (vw && vh) window.overlay.resize(vw / vh)
-      drawBoxes()
-    }, { once: true })
-  } else {
-    requestAnimationFrame(() => applyVideoSettings(muted))
+function createStream(url) {
+  const el = document.createElement('video-stream')
+  el.background = true
+  el.mode = 'webrtc,mse'
+  el.src = url
+  return el
+}
+
+function configureVideo(target, muted, onPlaying) {
+  if (!target.isConnected) return
+  if (!target.video) {
+    requestAnimationFrame(() => configureVideo(target, muted, onPlaying))
+    return
   }
+  target.video.muted = muted
+  target.video.controls = false
+  target.video.disableRemotePlayback = true
+  target.video.addEventListener('playing', () => onPlaying(target.video), { once: true })
 }
 
 function startStream(url, muted) {
   stopStream()
   streamPlaying = false
   streamFailed = false
-  stream = document.createElement('video-stream')
-  stream.background = true
-  stream.mode = 'webrtc,mse'
-  stream.src = url
+  stream = createStream(url)
   videoBox.appendChild(stream)
-  applyVideoSettings(muted)
+  configureVideo(stream, muted, (video) => {
+    streamPlaying = true
+    clearTimeout(streamWatchdog)
+    poster.style.opacity = '0'
+    if (video.videoWidth && video.videoHeight) window.overlay.resize(video.videoWidth / video.videoHeight)
+    drawBoxes()
+  })
   streamWatchdog = setTimeout(() => {
     if (!streamPlaying) {
       streamFailed = true
@@ -236,8 +242,126 @@ function stopStream() {
   }
 }
 
+function freshUrl(url) {
+  return url + (url.includes('?') ? '&' : '?') + 't=' + Date.now()
+}
+
+function stopLive() {
+  for (const tile of liveTiles) {
+    clearTimeout(tile.watchdog)
+    if (tile.stream) {
+      tile.stream.ondisconnect()
+      tile.stream.remove()
+    }
+  }
+  liveTiles = []
+  gridEl.innerHTML = ''
+  gridEl.classList.add('hidden')
+  card.classList.remove('live')
+}
+
+function startTileStream(tile) {
+  clearTimeout(tile.watchdog)
+  if (tile.stream) {
+    tile.stream.ondisconnect()
+    tile.stream.remove()
+  }
+  tile.playing = false
+  tile.failed = false
+  tile.stream = createStream(tile.camera.streamUrl)
+  tile.el.insertBefore(tile.stream, tile.el.firstChild)
+  configureVideo(tile.stream, tile.muted, (video) => {
+    tile.playing = true
+    clearTimeout(tile.watchdog)
+    tile.poster.style.opacity = '0'
+    if (liveTiles.length === 1 && video.videoWidth && video.videoHeight) {
+      window.overlay.resize(video.videoWidth / video.videoHeight)
+    }
+  })
+  tile.watchdog = setTimeout(() => {
+    if (!tile.playing) {
+      tile.failed = true
+      window.overlay.streamFailed()
+    }
+  }, STREAM_TIMEOUT_MS)
+}
+
+function loadTilePoster(tile) {
+  tile.posterFailed = false
+  if (tile.camera.poster) {
+    tile.poster.style.opacity = '1'
+    tile.poster.src = freshUrl(tile.camera.poster)
+  } else {
+    tile.poster.style.opacity = '0'
+  }
+}
+
+function buildTile(camera, muted) {
+  const el = document.createElement('div')
+  el.className = 'tile'
+  const img = document.createElement('img')
+  img.className = 'tile-poster'
+  img.alt = ''
+  const name = document.createElement('span')
+  name.className = 'tile-name'
+  name.textContent = camera.name
+  el.append(img, name)
+  const tile = { camera, muted, el, poster: img, stream: null, watchdog: null, playing: false, failed: false, posterFailed: false }
+  img.addEventListener('error', () => {
+    if (!img.getAttribute('src')) return
+    tile.posterFailed = true
+    window.overlay.streamFailed()
+  })
+  if (camera.clickUrl) {
+    el.classList.add('clickable')
+    el.addEventListener('click', () => window.overlay.openUrl(camera.clickUrl))
+  }
+  return tile
+}
+
+// Live view replaces whatever the card is showing, so any event state and timers are reset first.
+function showLive(data) {
+  clearTimeout(dismissTimer)
+  clearTimeout(hideTimer)
+  hideTimer = null
+  resetTimerBar()
+  clearBoxes()
+  stopStream()
+  stopLive()
+  activeEvents.clear()
+  colorMap.clear()
+  colorIndex = 0
+  activeStreamUrl = null
+  activeClickUrl = null
+  lastShownEvent = null
+  card.classList.remove('clickable')
+
+  const count = data.cameras.length
+  const cols = Math.ceil(Math.sqrt(count))
+  gridEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`
+  gridEl.style.gridTemplateRows = `repeat(${Math.ceil(count / cols)}, 1fr)`
+  gridEl.classList.toggle('single', count === 1)
+  camEl.textContent = count === 1 ? data.cameras[0].name : 'Live view'
+
+  for (const camera of data.cameras) {
+    const tile = buildTile(camera, data.muted)
+    liveTiles.push(tile)
+    gridEl.appendChild(tile.el)
+    loadTilePoster(tile)
+    startTileStream(tile)
+  }
+
+  card.classList.add('live')
+  gridEl.classList.remove('hidden')
+  card.classList.remove('hidden')
+  requestAnimationFrame(() => card.classList.add('show'))
+}
+
 function show(event) {
   clearTimeout(dismissTimer)
+  clearTimeout(hideTimer)
+  hideTimer = null
+  if (card.classList.contains('live')) stopLive()
   lastShownEvent = event
 
   const reuseCard = card.classList.contains('show') && event.streamUrl === activeStreamUrl
@@ -282,8 +406,11 @@ function hide() {
   activeClickUrl = null
   card.classList.remove('clickable')
   card.classList.remove('show')
-  setTimeout(() => {
+  clearTimeout(hideTimer)
+  hideTimer = setTimeout(() => {
+    hideTimer = null
     stopStream()
+    stopLive()
     card.classList.add('hidden')
     window.overlay.hide()
   }, 320)
@@ -318,7 +445,36 @@ poster.addEventListener('error', () => {
   window.overlay.streamFailed()
 })
 
+window.overlay.onLiveOpen((data) => showLive(data))
+
+window.overlay.onLiveClose((opts) => {
+  // Main only asks to animate out while it believes live view is open; hiding even if the
+  // card already moved on keeps both sides in agreement.
+  if (opts.animate) {
+    hide()
+    return
+  }
+  if (!card.classList.contains('live')) return
+  // Placement mode reuses this window, so tear down in place without asking main to hide it.
+  clearTimeout(hideTimer)
+  hideTimer = null
+  stopLive()
+  card.classList.remove('show')
+  card.classList.add('hidden')
+})
+
+window.overlay.onDismiss(() => {
+  if (card.classList.contains('show') && !card.classList.contains('live')) hide()
+})
+
 window.overlay.onReauth(() => {
+  if (card.classList.contains('live')) {
+    for (const tile of liveTiles) {
+      if (tile.posterFailed) loadTilePoster(tile)
+      if (tile.failed) startTileStream(tile)
+    }
+    return
+  }
   if (!card.classList.contains('show') || !lastShownEvent) return
   if (posterFailed && lastShownEvent.poster) {
     posterFailed = false
