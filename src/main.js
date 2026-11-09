@@ -51,7 +51,7 @@ const AUDIO_NON_LABELS = new Set(['all', 'dBFS', 'rms', 'transcription', 'set', 
 const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
 const REAUTH_MAX_RETRIES = 3
-const DEFAULT_LIVE_HOTKEY = 'CommandOrControl+Shift+C'
+const DEFAULT_LIVE_HOTKEY = 'CommandOrControl+Alt+Z'
 
 const DISMISS_OPTIONS = [
   { label: '3 seconds', value: 3 },

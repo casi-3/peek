@@ -27,7 +27,7 @@
 - Shows the detected object, score, recognized face, license plate, and entered zones
 - Optional instant snapshot so there is no black frame while the live feed connects
 - Menu bar app: pick which cameras notify, toggle sound, set the dismiss delay
-- Global keyboard shortcut (default `Ctrl+Shift+C`) opens a live view of one camera or a grid of several, on demand
+- Global keyboard shortcut (default `Ctrl+Alt+Z`) opens a live view of one camera or a grid of several, on demand
 - Frameless, always-on-top, translucent card that slides in and out
 - Cross-platform: macOS and Windows
 - Connects to your existing MQTT broker and Frigate, no server-side change
@@ -123,7 +123,7 @@ them under **Only pop up in zones** in the tray menu, or in **Settings…** unde
 
 ### Live view shortcut
 
-Press `Ctrl+Shift+C` (`Cmd+Shift+C` on macOS) from any app to open a live view
+Press `Ctrl+Alt+Z` (`Cmd+Option+Z` on macOS) from any app to open a live view
 without waiting for a detection. Press it again, or click the close button, to
 hide it. The shortcut is also on the tray menu as **Show live view**.
 
@@ -137,9 +137,9 @@ hide it. The shortcut is also on the tray menu as **Show live view**.
   is set to **Do nothing**.
 
 The shortcut is global, so while Peek runs it takes that key combination away
-from every other app. `Ctrl+Shift+C` is copy in Windows Terminal and the
-element picker in browser developer tools; pick another combination if you use
-those.
+from every other app. On keyboard layouts where `Ctrl+Alt` acts as `AltGr`,
+`Ctrl+Alt+Z` may type a character (for example `ż` on Polish layouts); pick
+another combination if so.
 
 ### Updates
 
