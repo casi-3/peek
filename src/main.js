@@ -40,6 +40,7 @@ let cameraDetectMap = {}
 let certProcSet = false
 let liveView = null
 let registeredHotkey = null
+let resumeTimer = null
 const knownCameras = new Set()
 const knownAudioLabels = new Set()
 const activeAudio = new Set()
@@ -60,6 +61,14 @@ const DISMISS_OPTIONS = [
   { label: '15 seconds', value: 15 },
   { label: '30 seconds', value: 30 },
   { label: 'Until dismissed', value: 0 }
+]
+
+const PAUSE_OPTIONS = [
+  { label: '30 minutes', minutes: 30 },
+  { label: '1 hour', minutes: 60 },
+  { label: '3 hours', minutes: 180 },
+  { label: '6 hours', minutes: 360 },
+  { label: 'Rest of today', minutes: null }
 ]
 
 function httpToWs(url) {
@@ -296,6 +305,7 @@ function defaultPrefs() {
     liveHotkey: DEFAULT_LIVE_HOTKEY,
     liveCameras: {},
     zoneFilter: [],
+    pausedUntil: 0,
     skipVersion: '',
     lastNotify: { version: '', at: 0 }
   }
@@ -321,6 +331,7 @@ function loadPrefs() {
     liveHotkey: typeof saved.liveHotkey === 'string' ? saved.liveHotkey : base.liveHotkey,
     liveCameras: Object.assign({}, base.liveCameras, saved.liveCameras),
     zoneFilter: normalizeZoneFilter(saved.zoneFilter),
+    pausedUntil: Number.isFinite(saved.pausedUntil) ? saved.pausedUntil : base.pausedUntil,
     skipVersion: saved.skipVersion != null ? saved.skipVersion : base.skipVersion,
     lastNotify: saved.lastNotify != null ? saved.lastNotify : base.lastNotify
   }
@@ -341,6 +352,50 @@ function setZoneFilter(list) {
 
 function savePrefs() {
   writePrefs(prefs)
+}
+
+// Event paths check the timestamp directly, so a timer delayed by sleep can never keep pop-ups off.
+function isPaused() {
+  return prefs.pausedUntil > Date.now()
+}
+
+function endOfToday() {
+  const d = new Date()
+  d.setHours(24, 0, 0, 0)
+  return d.getTime()
+}
+
+function pausedUntilText() {
+  return new Date(prefs.pausedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// The timer only refreshes the tray menu and tooltip once the pause runs out.
+function schedulePauseEnd() {
+  clearTimeout(resumeTimer)
+  resumeTimer = null
+  if (!isPaused()) return
+  resumeTimer = setTimeout(() => {
+    resumeTimer = null
+    if (isPaused()) schedulePauseEnd()
+    else buildMenu()
+  }, prefs.pausedUntil - Date.now())
+}
+
+function pauseUntil(ts) {
+  prefs.pausedUntil = ts
+  savePrefs()
+  schedulePauseEnd()
+  if (win && !win.isDestroyed() && win.isVisible() && !liveView && !placementMode) {
+    win.webContents.send('overlay-dismiss')
+  }
+  buildMenu()
+}
+
+function resumeNow() {
+  prefs.pausedUntil = 0
+  savePrefs()
+  schedulePauseEnd()
+  buildMenu()
 }
 
 function supportsOpenAtLogin() {
@@ -609,7 +664,22 @@ function buildMenu() {
     }
   }))
 
+  const pauseOptionItems = PAUSE_OPTIONS.map(opt => ({
+    label: opt.label,
+    click: () => pauseUntil(opt.minutes == null ? endOfToday() : Date.now() + opt.minutes * 60 * 1000)
+  }))
+  const paused = isPaused()
+  const pauseItems = paused
+    ? [
+        { label: `Paused until ${pausedUntilText()}`, enabled: false },
+        { label: 'Resume pop-ups', click: () => resumeNow() },
+        { label: 'Pause pop-ups', submenu: pauseOptionItems }
+      ]
+    : [{ label: 'Pause pop-ups', submenu: pauseOptionItems }]
+
   const menu = Menu.buildFromTemplate([
+    ...pauseItems,
+    { type: 'separator' },
     { label: 'Cameras', submenu: cameraItems },
     { label: 'Audio labels', submenu: audioLabelItems },
     { label: 'Only pop up in zones', submenu: zoneItems },
@@ -700,7 +770,10 @@ function buildMenu() {
     { label: 'Quit', role: 'quit' }
   ])
 
-  if (tray) tray.setContextMenu(menu)
+  if (tray) {
+    tray.setContextMenu(menu)
+    tray.setToolTip(paused ? `Peek (paused until ${pausedUntilText()})` : 'Peek')
+  }
 }
 
 function createTray() {
@@ -723,6 +796,15 @@ function handleEvent(data) {
   if (labels.length && !labels.includes(after.label)) return
 
   ;[...(after.current_zones || []), ...(after.entered_zones || [])].forEach(z => learnZone(z, after.camera))
+
+  if (isPaused()) {
+    // Still clear ended events so the zone and stationary sets hold no stale ids once the pause ends.
+    if (data.type === 'end') {
+      zoneEvents.delete(after.id)
+      stationaryEvents.delete(after.id)
+    }
+    return
+  }
 
   let type = data.type
   let zoneEntered = false
@@ -789,6 +871,7 @@ function emitAudioEvent(type, camera, label) {
   if (!cameraEnabled(camera) || !audioLabelEnabled(label)) return
   // Audio detections carry no zone, so a zone filter rules them out.
   if (type === 'new' && prefs.zoneFilter.length) return
+  if (type === 'new' && isPaused()) return
 
   const id = `audio-${camera}-${label}`
   const event = {
@@ -960,6 +1043,7 @@ function requestReauth() {
 function startApp() {
   appStarted = true
   loadPrefs()
+  schedulePauseEnd()
   applyOpenAtLogin(prefs.openAtLogin)
   createWindow()
   createTray()
@@ -1221,6 +1305,10 @@ app.whenReady().then(() => {
   powerMonitor.on('resume', () => {
     if (mqttClient) mqttClient.reconnect()
     initFrigateAuth()
+    if (prefs) {
+      schedulePauseEnd()
+      buildMenu()
+    }
   })
 
   ipcMain.on('overlay-hide', () => {

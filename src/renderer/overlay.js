@@ -463,6 +463,10 @@ window.overlay.onLiveClose((opts) => {
   card.classList.add('hidden')
 })
 
+window.overlay.onDismiss(() => {
+  if (card.classList.contains('show') && !card.classList.contains('live')) hide()
+})
+
 window.overlay.onReauth(() => {
   if (card.classList.contains('live')) {
     for (const tile of liveTiles) {

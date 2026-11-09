@@ -11,5 +11,6 @@ contextBridge.exposeInMainWorld('overlay', {
   cancelPlacement: () => ipcRenderer.send('placement-cancel'),
   resize: (aspect) => ipcRenderer.send('overlay-resize', aspect),
   onLiveOpen: (callback) => ipcRenderer.on('live-open', (event, data) => callback(data)),
+  onDismiss: (callback) => ipcRenderer.on('overlay-dismiss', () => callback()),
   onLiveClose: (callback) => ipcRenderer.on('live-close', (event, opts) => callback(opts || {}))
 })

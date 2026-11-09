@@ -27,6 +27,7 @@
 - Shows the detected object, score, recognized face, license plate, and entered zones
 - Optional instant snapshot so there is no black frame while the live feed connects
 - Menu bar app: pick which cameras notify, toggle sound, set the dismiss delay
+- Pause pop-ups for 30 minutes, 1, 3 or 6 hours, or the rest of the day
 - Global keyboard shortcut (default `Ctrl+Alt+Z`) opens a live view of one camera or a grid of several, on demand
 - Frameless, always-on-top, translucent card that slides in and out
 - Cross-platform: macOS and Windows
@@ -120,6 +121,18 @@ them under **Only pop up in zones** in the tray menu, or in **Settings…** unde
   counts for all of them.
 - Audio detections have no zone, so they stop popping up while a zone filter is
   set.
+
+### Pausing pop-ups
+
+Pick a time under **Pause pop-ups** at the top of the tray menu: 30 minutes,
+1 hour, 3 hours, 6 hours or **Rest of today** (until midnight). A card on
+screen slides away, and the menu shows when pop-ups come back.
+
+- Pick **Resume pop-ups** to end the pause early, or pick another time to
+  replace it.
+- The pause covers object and audio detections. The live view shortcut still
+  works.
+- The pause survives a restart of Peek.
 
 ### Live view shortcut
 
