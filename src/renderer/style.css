@@ -88,6 +88,70 @@ body {
   transition: opacity 0.4s ease;
 }
 
+#grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  gap: 2px;
+  background: #000;
+}
+
+#grid.hidden,
+#card.live #video,
+#card.live #bottom,
+#card.live #timer-bar {
+  display: none;
+}
+
+.tile {
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  background: #000;
+}
+
+.tile.clickable {
+  cursor: pointer;
+}
+
+.tile video-stream,
+.tile video,
+.tile-poster {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.tile video-stream,
+.tile video {
+  z-index: 1;
+}
+
+.tile-poster {
+  z-index: 2;
+  transition: opacity 0.4s ease;
+}
+
+.tile-name {
+  position: absolute;
+  left: 10px;
+  bottom: 8px;
+  z-index: 3;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+
+#grid.single .tile-name {
+  display: none;
+}
+
 #top,
 #bottom {
   position: absolute;
