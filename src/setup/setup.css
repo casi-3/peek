@@ -65,6 +65,15 @@ body {
   font-weight: 600;
 }
 
+.camera-list .group-title {
+  padding: 8px 10px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
 .camera-list .empty {
   padding: 8px 10px;
   color: var(--muted);

@@ -47,6 +47,7 @@ const stationaryEvents = new Set()
 const zoneEvents = new Set()
 // Keyed by lower-case zone name, since the same zone name can exist on several cameras.
 const knownZones = new Map()
+const knownObjectLabels = new Set()
 const AUDIO_NON_LABELS = new Set(['all', 'dBFS', 'rms', 'transcription', 'set', 'state'])
 const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
@@ -86,6 +87,8 @@ function buildStreamMap(frigateConfig) {
     if (cam && cam.zones && typeof cam.zones === 'object') {
       Object.keys(cam.zones).forEach(zone => learnZone(zone, name))
     }
+    const track = cam && cam.objects && cam.objects.track
+    if (Array.isArray(track)) track.forEach(learnObjectLabel)
   }
 }
 
@@ -296,6 +299,7 @@ function defaultPrefs() {
     liveHotkey: DEFAULT_LIVE_HOTKEY,
     liveCameras: {},
     zoneFilter: [],
+    zoneLabels: {},
     skipVersion: '',
     lastNotify: { version: '', at: 0 }
   }
@@ -321,12 +325,15 @@ function loadPrefs() {
     liveHotkey: typeof saved.liveHotkey === 'string' ? saved.liveHotkey : base.liveHotkey,
     liveCameras: Object.assign({}, base.liveCameras, saved.liveCameras),
     zoneFilter: normalizeZoneFilter(saved.zoneFilter),
+    zoneLabels: normalizeZoneLabels(saved.zoneLabels),
     skipVersion: saved.skipVersion != null ? saved.skipVersion : base.skipVersion,
     lastNotify: saved.lastNotify != null ? saved.lastNotify : base.lastNotify
   }
   Object.keys(prefs.cameras).forEach(c => knownCameras.add(c))
   Object.keys(prefs.audioLabels).forEach(l => knownAudioLabels.add(l))
-  prefs.zoneFilter.forEach(z => knownZones.set(z, { name: z, cameras: new Set() }))
+  const savedZones = new Set([...prefs.zoneFilter, ...Object.keys(prefs.zoneLabels)])
+  savedZones.forEach(z => knownZones.set(z, { name: z, cameras: new Set() }))
+  Object.values(prefs.zoneLabels).forEach(list => list.forEach(l => knownObjectLabels.add(l)))
 }
 
 function normalizeZoneFilter(list) {
@@ -336,6 +343,26 @@ function normalizeZoneFilter(list) {
 
 function setZoneFilter(list) {
   prefs.zoneFilter = normalizeZoneFilter(list)
+  zoneEvents.clear()
+}
+
+// Maps a zone to the object labels allowed in it. A zone with no entry, or an
+// empty list, allows any object, which is how prefs saved before this existed behave.
+function normalizeZoneLabels(map) {
+  const out = {}
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return out
+  for (const [zone, labels] of Object.entries(map)) {
+    const key = typeof zone === 'string' ? zone.trim().toLowerCase() : ''
+    const list = normalizeZoneFilter(labels)
+    if (key && list.length) out[key] = list
+  }
+  return out
+}
+
+function setZoneLabels(key, labels) {
+  const list = normalizeZoneFilter(labels)
+  if (list.length) prefs.zoneLabels[key] = list
+  else delete prefs.zoneLabels[key]
   zoneEvents.clear()
 }
 
@@ -388,6 +415,11 @@ function applyRuntimePrefs(opts) {
     }
   }
   if (Array.isArray(opts.zoneFilter)) setZoneFilter(opts.zoneFilter)
+  if (opts.zoneLabels && typeof opts.zoneLabels === 'object') {
+    for (const [zone, labels] of Object.entries(opts.zoneLabels)) {
+      if (Array.isArray(labels)) setZoneLabels(zone.toLowerCase(), labels)
+    }
+  }
   if (typeof opts.liveHotkey === 'string' && opts.liveHotkey !== prefs.liveHotkey) {
     prefs.liveHotkey = opts.liveHotkey
     applyHotkey(prefs.liveHotkey)
@@ -523,9 +555,40 @@ function zoneLabel(key) {
   return cameras.length ? `${name} (${cameras.join(', ')})` : name
 }
 
+function learnObjectLabel(label) {
+  if (typeof label !== 'string' || !label) return
+  const key = label.toLowerCase()
+  if (knownObjectLabels.has(key)) return
+  knownObjectLabels.add(key)
+  buildMenu()
+}
+
+function zoneAllowsLabel(key, label) {
+  if (!prefs.zoneFilter.includes(key)) return false
+  const allowed = prefs.zoneLabels[key]
+  return !allowed || allowed.includes(String(label).toLowerCase())
+}
+
 function eventInSelectedZone(after) {
   const zones = [...(after.current_zones || []), ...(after.entered_zones || [])]
-  return zones.some(z => typeof z === 'string' && prefs.zoneFilter.includes(z.toLowerCase()))
+  return zones.some(z => typeof z === 'string' && zoneAllowsLabel(z.toLowerCase(), after.label))
+}
+
+function zoneObjectLabels(key) {
+  return [...new Set([...knownObjectLabels, ...(prefs.zoneLabels[key] || [])])].sort()
+}
+
+function zoneObjectsSummary(key) {
+  const allowed = prefs.zoneLabels[key]
+  return allowed ? allowed.map(titleCase).join(', ') : 'Any object'
+}
+
+function toggleZoneLabel(key, label, on) {
+  const next = (prefs.zoneLabels[key] || []).filter(l => l !== label)
+  if (on) next.push(label)
+  setZoneLabels(key, next)
+  savePrefs()
+  buildMenu()
 }
 
 function toggleZone(key, on) {
@@ -597,6 +660,38 @@ function buildMenu() {
   ]
   if (knownZones.size === 0) {
     zoneItems.push({ label: 'No zones found in Frigate', enabled: false })
+  }
+  const pickedZones = prefs.zoneFilter.filter(key => knownZones.has(key)).sort()
+  if (pickedZones.length) {
+    zoneItems.push({ type: 'separator' })
+    pickedZones.forEach(key => {
+      const entry = knownZones.get(key)
+      const labels = zoneObjectLabels(key)
+      zoneItems.push({
+        label: `Objects in ${titleCase(entry.name || key)}: ${zoneObjectsSummary(key)}`,
+        submenu: [
+          {
+            label: 'Any object',
+            type: 'checkbox',
+            checked: !prefs.zoneLabels[key],
+            click: () => {
+              setZoneLabels(key, [])
+              savePrefs()
+              buildMenu()
+            }
+          },
+          { type: 'separator' },
+          ...(labels.length
+            ? labels.map(label => ({
+                label: titleCase(label),
+                type: 'checkbox',
+                checked: !!(prefs.zoneLabels[key] && prefs.zoneLabels[key].includes(label)),
+                click: (item) => toggleZoneLabel(key, label, item.checked)
+              }))
+            : [{ label: 'No objects found in Frigate', enabled: false }])
+        ]
+      })
+    })
   }
 
   const dismissItems = DISMISS_OPTIONS.map(opt => ({
@@ -723,6 +818,7 @@ function handleEvent(data) {
   if (labels.length && !labels.includes(after.label)) return
 
   ;[...(after.current_zones || []), ...(after.entered_zones || [])].forEach(z => learnZone(z, after.camera))
+  learnObjectLabel(after.label)
 
   let type = data.type
   let zoneEntered = false
@@ -1267,6 +1363,17 @@ app.whenReady().then(() => {
       liveCameras,
       zones: appStarted
         ? [...knownZones.keys()].sort().map(key => ({ name: key, label: zoneLabel(key), enabled: prefs.zoneFilter.includes(key) }))
+        : [],
+      zoneObjects: appStarted
+        ? [...knownZones.keys()].sort().map(key => ({
+            zone: key,
+            label: titleCase(knownZones.get(key).name || key),
+            objects: zoneObjectLabels(key).map(name => ({
+              name,
+              label: titleCase(name),
+              enabled: !!(prefs.zoneLabels[key] && prefs.zoneLabels[key].includes(name))
+            }))
+          }))
         : []
     }
   })

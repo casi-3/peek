@@ -140,13 +140,62 @@ function buildCameraList(container, cameras, emptyText) {
   }
 }
 
+function buildZoneObjectList(container, zones) {
+  container.innerHTML = ''
+  if (!zones.length) {
+    const empty = document.createElement('div')
+    empty.className = 'empty'
+    empty.textContent = 'No zones found in Frigate'
+    container.appendChild(empty)
+    return
+  }
+  for (const zone of zones) {
+    const group = document.createElement('div')
+    group.setAttribute('role', 'group')
+    group.setAttribute('aria-label', zone.label)
+    const title = document.createElement('div')
+    title.className = 'group-title'
+    title.textContent = zone.label
+    group.appendChild(title)
+    if (!zone.objects.length) {
+      const empty = document.createElement('div')
+      empty.className = 'empty'
+      empty.textContent = 'No objects found in Frigate'
+      group.appendChild(empty)
+    }
+    for (const obj of zone.objects) {
+      const opt = document.createElement('div')
+      opt.setAttribute('role', 'option')
+      opt.tabIndex = 0
+      opt.dataset.zone = zone.zone
+      opt.dataset.value = obj.name
+      opt.textContent = obj.label
+      opt.setAttribute('aria-selected', String(!!obj.enabled))
+      group.appendChild(opt)
+    }
+    container.appendChild(group)
+  }
+}
+
+function selectedZoneObjects(container) {
+  const zones = {}
+  container.querySelectorAll('[role="group"]').forEach(group => {
+    const opts = group.querySelectorAll('[role="option"]')
+    if (!opts.length) return
+    zones[opts[0].dataset.zone] = Array.from(opts)
+      .filter(opt => opt.getAttribute('aria-selected') === 'true')
+      .map(opt => opt.dataset.value)
+  })
+  return zones
+}
+
 // A plain div list, not a native multi-select: Chromium scrolls a multi-select
 // back to its first selected option after every toggle.
 function toggleOption(opt) {
   opt.setAttribute('aria-selected', String(opt.getAttribute('aria-selected') !== 'true'))
 }
 
-for (const id of ['cameraList', 'liveCameraList', 'zoneList']) {
+for (const id of ['cameraList', 'liveCameraList', 'zoneList', 'zoneObjectList']) {
   const list = el(id)
   list.addEventListener('click', e => {
     const opt = e.target.closest('[role="option"]')
@@ -275,6 +324,7 @@ function runtimeOpts() {
     liveHotkey,
     liveCameras: selectedCameras(el('liveCameraList')),
     zoneFilter: Object.entries(selectedCameras(el('zoneList'))).filter(([, on]) => on).map(([name]) => name),
+    zoneLabels: selectedZoneObjects(el('zoneObjectList')),
     sound: fields.sound.checked,
     snapshot: fields.snapshot.checked,
     showAllObjectsInFrame: fields.showAllObjectsInFrame.checked,
@@ -315,6 +365,7 @@ async function init() {
     fields.clickAction.value = (p && p.clickAction) || 'event'
     buildCameraList(el('cameraList'), p.cameras || [])
     buildCameraList(el('zoneList'), p.zones || [], 'No zones found in Frigate')
+    buildZoneObjectList(el('zoneObjectList'), p.zoneObjects || [])
     el('liveSection').classList.remove('hidden')
     buildCameraList(el('liveCameraList'), p.liveCameras || [])
     setHotkey(p.liveHotkey || '')

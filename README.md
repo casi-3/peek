@@ -121,6 +121,15 @@ them under **Only pop up in zones** in the tray menu, or in **Settings…** unde
 - Audio detections have no zone, so they stop popping up while a zone filter is
   set.
 
+To pop up for some objects only in a zone, such as cars in the driveway but
+people on the front porch, pick them under **Objects in Driveway** (or your zone's name) in the same
+tray submenu, or under **Objects in each zone** in **Settings…**.
+
+- A zone with no objects picked pops up for any object, as before.
+- An object pops up if it is in at least one picked zone that allows its label.
+- The `labels` list in `config.json` still applies first, so a label left out
+  there never pops up.
+
 ### Live view shortcut
 
 Press `Ctrl+Alt+Z` (`Cmd+Option+Z` on macOS) from any app to open a live view
