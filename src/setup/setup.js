@@ -140,13 +140,33 @@ function buildCameraList(container, cameras, emptyText) {
   }
 }
 
-function buildZoneObjectList(container, zones) {
+// Every zone's object choices, including zones not picked right now, so
+// unpicking a zone and picking it again keeps what was chosen for it.
+let zoneObjects = []
+
+function rememberZoneObjects() {
+  el('zoneObjectList').querySelectorAll('[role="option"]').forEach(opt => {
+    const zone = zoneObjects.find(z => z.zone === opt.dataset.zone)
+    const obj = zone && zone.objects.find(o => o.name === opt.dataset.value)
+    if (obj) obj.enabled = opt.getAttribute('aria-selected') === 'true'
+  })
+}
+
+function emptyRow(text) {
+  const empty = document.createElement('div')
+  empty.className = 'empty'
+  empty.textContent = text
+  return empty
+}
+
+function renderZoneObjectList() {
+  const container = el('zoneObjectList')
+  rememberZoneObjects()
+  const picked = selectedCameras(el('zoneList'))
+  const zones = zoneObjects.filter(z => picked[z.zone])
   container.innerHTML = ''
   if (!zones.length) {
-    const empty = document.createElement('div')
-    empty.className = 'empty'
-    empty.textContent = 'No zones found in Frigate'
-    container.appendChild(empty)
+    container.appendChild(emptyRow('Pick a zone above to choose its objects'))
     return
   }
   for (const zone of zones) {
@@ -157,12 +177,7 @@ function buildZoneObjectList(container, zones) {
     title.className = 'group-title'
     title.textContent = zone.label
     group.appendChild(title)
-    if (!zone.objects.length) {
-      const empty = document.createElement('div')
-      empty.className = 'empty'
-      empty.textContent = 'No objects found in Frigate'
-      group.appendChild(empty)
-    }
+    if (!zone.objects.length) group.appendChild(emptyRow('No objects found in Frigate'))
     for (const obj of zone.objects) {
       const opt = document.createElement('div')
       opt.setAttribute('role', 'option')
@@ -177,15 +192,12 @@ function buildZoneObjectList(container, zones) {
   }
 }
 
-function selectedZoneObjects(container) {
+function selectedZoneObjects() {
+  rememberZoneObjects()
   const zones = {}
-  container.querySelectorAll('[role="group"]').forEach(group => {
-    const opts = group.querySelectorAll('[role="option"]')
-    if (!opts.length) return
-    zones[opts[0].dataset.zone] = Array.from(opts)
-      .filter(opt => opt.getAttribute('aria-selected') === 'true')
-      .map(opt => opt.dataset.value)
-  })
+  for (const zone of zoneObjects) {
+    zones[zone.zone] = zone.objects.filter(o => o.enabled).map(o => o.name)
+  }
   return zones
 }
 
@@ -209,6 +221,12 @@ for (const id of ['cameraList', 'liveCameraList', 'zoneList', 'zoneObjectList'])
     toggleOption(opt)
   })
 }
+
+// Registered after the toggle handlers above, so the zone list is already updated.
+el('zoneList').addEventListener('click', renderZoneObjectList)
+el('zoneList').addEventListener('keydown', e => {
+  if (e.key === ' ' || e.key === 'Enter') renderZoneObjectList()
+})
 
 function selectedCameras(container) {
   const cameras = {}
@@ -324,7 +342,7 @@ function runtimeOpts() {
     liveHotkey,
     liveCameras: selectedCameras(el('liveCameraList')),
     zoneFilter: Object.entries(selectedCameras(el('zoneList'))).filter(([, on]) => on).map(([name]) => name),
-    zoneLabels: selectedZoneObjects(el('zoneObjectList')),
+    zoneLabels: selectedZoneObjects(),
     sound: fields.sound.checked,
     snapshot: fields.snapshot.checked,
     showAllObjectsInFrame: fields.showAllObjectsInFrame.checked,
@@ -365,7 +383,8 @@ async function init() {
     fields.clickAction.value = (p && p.clickAction) || 'event'
     buildCameraList(el('cameraList'), p.cameras || [])
     buildCameraList(el('zoneList'), p.zones || [], 'No zones found in Frigate')
-    buildZoneObjectList(el('zoneObjectList'), p.zoneObjects || [])
+    zoneObjects = p.zoneObjects || []
+    renderZoneObjectList()
     el('liveSection').classList.remove('hidden')
     buildCameraList(el('liveCameraList'), p.liveCameras || [])
     setHotkey(p.liveHotkey || '')
