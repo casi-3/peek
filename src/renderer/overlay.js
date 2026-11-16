@@ -53,6 +53,65 @@ let hideTimer = null
 let liveTiles = []
 
 const STREAM_TIMEOUT_MS = 8000
+const MAX_ZOOM = 8
+const ZOOM_RATE = 0.0015
+const RESIZE_RATE = 0.001
+const DRAG_THRESHOLD_PX = 4
+const DBLCLICK_WAIT_MS = 250
+
+// Zooms el with a transform. Coordinates are relative to el's parent, which el fills.
+function createZoom(el) {
+  let scale = 1
+  let tx = 0
+  let ty = 0
+
+  function apply() {
+    if (scale <= 1) {
+      scale = 1
+      tx = 0
+      ty = 0
+      el.style.transform = ''
+      el.classList.remove('zoomed')
+      return
+    }
+    // Keeps the picture covering the frame so no black edges show.
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    tx = Math.min(0, Math.max(w - w * scale, tx))
+    ty = Math.min(0, Math.max(h - h * scale, ty))
+    el.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`
+    el.classList.add('zoomed')
+  }
+
+  return {
+    el,
+    get scale() { return scale },
+    get zoomed() { return scale > 1 },
+    zoomAt(factor, mx, my) {
+      let next = Math.min(MAX_ZOOM, scale * factor)
+      if (next < 1.001) next = 1
+      tx = mx - (mx - tx) * next / scale
+      ty = my - (my - ty) * next / scale
+      scale = next
+      apply()
+    },
+    panBy(dx, dy) {
+      tx += dx
+      ty += dy
+      apply()
+    },
+    refit: apply,
+    reset() {
+      scale = 1
+      apply()
+    }
+  }
+}
+
+const videoZoom = createZoom(videoBox)
+let drag = null
+let suppressClick = false
+let pendingClick = null
 
 function assignColor(id) {
   if (!colorMap.has(id)) {
@@ -147,9 +206,9 @@ function drawBoxes() {
     bboxCtx.beginPath()
     bboxCtx.roundRect(cx, cy, bw, bh, r)
     bboxCtx.shadowColor = 'rgba(0,0,0,0.75)'
-    bboxCtx.shadowBlur = 4
+    bboxCtx.shadowBlur = 4 / videoZoom.scale
     bboxCtx.strokeStyle = color
-    bboxCtx.lineWidth = 2
+    bboxCtx.lineWidth = 2 / videoZoom.scale
     bboxCtx.stroke()
     bboxCtx.shadowBlur = 0
   }
@@ -269,7 +328,7 @@ function startTileStream(tile) {
   tile.playing = false
   tile.failed = false
   tile.stream = createStream(tile.camera.streamUrl)
-  tile.el.insertBefore(tile.stream, tile.el.firstChild)
+  tile.zoomEl.insertBefore(tile.stream, tile.zoomEl.firstChild)
   configureVideo(tile.stream, tile.muted, (video) => {
     tile.playing = true
     clearTimeout(tile.watchdog)
@@ -299,23 +358,23 @@ function loadTilePoster(tile) {
 function buildTile(camera, muted) {
   const el = document.createElement('div')
   el.className = 'tile'
+  const zoomEl = document.createElement('div')
+  zoomEl.className = 'tile-zoom'
   const img = document.createElement('img')
   img.className = 'tile-poster'
   img.alt = ''
+  zoomEl.appendChild(img)
   const name = document.createElement('span')
   name.className = 'tile-name'
   name.textContent = camera.name
-  el.append(img, name)
-  const tile = { camera, muted, el, poster: img, stream: null, watchdog: null, playing: false, failed: false, posterFailed: false }
+  el.append(zoomEl, name)
+  const tile = { camera, muted, el, zoomEl, zoom: createZoom(zoomEl), poster: img, stream: null, watchdog: null, playing: false, failed: false, posterFailed: false }
   img.addEventListener('error', () => {
     if (!img.getAttribute('src')) return
     tile.posterFailed = true
     window.overlay.streamFailed()
   })
-  if (camera.clickUrl) {
-    el.classList.add('clickable')
-    el.addEventListener('click', () => window.overlay.openUrl(camera.clickUrl))
-  }
+  if (camera.clickUrl) el.classList.add('clickable')
   return tile
 }
 
@@ -328,6 +387,7 @@ function showLive(data) {
   clearBoxes()
   stopStream()
   stopLive()
+  videoZoom.reset()
   activeEvents.clear()
   colorMap.clear()
   colorIndex = 0
@@ -382,6 +442,8 @@ function show(event) {
 
   if (reuseCard) return
 
+  videoZoom.reset()
+  drawBoxes()
   posterFailed = false
   if (event.poster) {
     poster.style.opacity = '1'
@@ -411,6 +473,7 @@ function hide() {
     hideTimer = null
     stopStream()
     stopLive()
+    videoZoom.reset()
     card.classList.add('hidden')
     window.overlay.hide()
   }, 320)
@@ -487,8 +550,108 @@ closeBtn.addEventListener('click', (e) => {
   hide()
 })
 
-card.addEventListener('click', () => {
-  if (activeClickUrl) window.overlay.openUrl(activeClickUrl)
+function tileAt(target) {
+  const el = target.closest('.tile')
+  return el ? liveTiles.find(t => t.el === el) : null
+}
+
+function zoomFor(target) {
+  if (!card.classList.contains('live')) return videoZoom
+  const tile = tileAt(target)
+  return tile ? tile.zoom : null
+}
+
+function clickUrlFor(target) {
+  if (!card.classList.contains('live')) return activeClickUrl
+  const tile = tileAt(target)
+  return tile ? tile.camera.clickUrl : null
+}
+
+card.addEventListener('wheel', (e) => {
+  e.preventDefault()
+  if (e.ctrlKey) {
+    window.overlay.scaleBy(Math.exp(-e.deltaY * RESIZE_RATE))
+    return
+  }
+  const zoom = zoomFor(e.target)
+  if (!zoom) return
+  const rect = zoom.el.parentElement.getBoundingClientRect()
+  zoom.zoomAt(Math.exp(-e.deltaY * ZOOM_RATE), e.clientX - rect.left, e.clientY - rect.top)
+  if (zoom === videoZoom) drawBoxes()
+}, { passive: false })
+
+card.addEventListener('pointerdown', (e) => {
+  // A drag released outside the window never fires click, so the flag can't be trusted from before.
+  suppressClick = false
+  if (e.button !== 0 || e.target.closest('#close')) return
+  const zoom = zoomFor(e.target)
+  if (!zoom || !zoom.zoomed) return
+  drag = { zoom, id: e.pointerId, x: e.clientX, y: e.clientY, moved: false }
+})
+
+window.addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.id) return
+  const dx = e.clientX - drag.x
+  const dy = e.clientY - drag.y
+  if (!drag.moved) {
+    if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return
+    drag.moved = true
+    // Capturing only once it's a real drag, so a plain click still lands on the tile it started on.
+    card.setPointerCapture(drag.id)
+    card.classList.add('panning')
+  }
+  drag.zoom.panBy(dx, dy)
+  drag.x = e.clientX
+  drag.y = e.clientY
+})
+
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return
+  if (drag.moved) suppressClick = true
+  card.classList.remove('panning')
+  drag = null
+}
+
+// A native drag cancels the pointer events that panning relies on.
+card.addEventListener('dragstart', (e) => e.preventDefault())
+
+window.addEventListener('pointerup', endDrag)
+window.addEventListener('pointercancel', endDrag)
+
+card.addEventListener('click', (e) => {
+  if (suppressClick) {
+    suppressClick = false
+    return
+  }
+  if (e.detail > 1) return
+  const url = clickUrlFor(e.target)
+  if (!url) return
+  const zoom = zoomFor(e.target)
+  if (!zoom || !zoom.zoomed) {
+    window.overlay.openUrl(url)
+    return
+  }
+  // Double-click resets zoom, so wait to see whether this click is the first half of one.
+  clearTimeout(pendingClick)
+  pendingClick = setTimeout(() => {
+    pendingClick = null
+    window.overlay.openUrl(url)
+  }, DBLCLICK_WAIT_MS)
+})
+
+card.addEventListener('dblclick', (e) => {
+  clearTimeout(pendingClick)
+  pendingClick = null
+  const zoom = zoomFor(e.target)
+  if (!zoom) return
+  zoom.reset()
+  if (zoom === videoZoom) drawBoxes()
+})
+
+window.addEventListener('resize', () => {
+  videoZoom.refit()
+  for (const tile of liveTiles) tile.zoom.refit()
+  drawBoxes()
 })
 
 window.overlay.onMode((mode) => {

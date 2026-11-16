@@ -13,6 +13,12 @@ body {
   user-select: none;
 }
 
+/* The faded-out poster sits on top of the video, so a drag would otherwise pick up the still image. */
+img,
+video {
+  -webkit-user-drag: none;
+}
+
 #card {
   position: absolute;
   inset: 8px;
@@ -55,6 +61,7 @@ body {
   position: absolute;
   inset: 0;
   background: #000;
+  transform-origin: 0 0;
 }
 
 #video video-stream,
@@ -113,6 +120,22 @@ body {
 
 .tile.clickable {
   cursor: pointer;
+}
+
+.tile-zoom {
+  position: absolute;
+  inset: 0;
+  transform-origin: 0 0;
+}
+
+#video.zoomed,
+.tile-zoom.zoomed {
+  cursor: grab;
+}
+
+#card.panning,
+#card.panning * {
+  cursor: grabbing;
 }
 
 .tile video-stream,

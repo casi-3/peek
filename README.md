@@ -141,6 +141,23 @@ from every other app. On keyboard layouts where `Ctrl+Alt` acts as `AltGr`,
 `Ctrl+Alt+Z` may type a character (for example `ż` on Polish layouts); pick
 another combination if so.
 
+### Zoom and resize
+
+Hover over a pop-up or a live view tile:
+
+- **Scroll** to zoom the picture in or out towards the mouse pointer. In a
+  grid, each tile zooms on its own.
+- **Drag** to move around while zoomed in.
+- **Double-click** to zoom back out. While zoomed in, a single click still opens
+  Frigate, a moment later.
+- **Ctrl + scroll** to make the window bigger or smaller. In live view, every
+  tile grows or shrinks together. Pop-up and live view sizes are saved
+  separately and kept after a restart. **Reset overlay size** in the tray menu
+  puts both back.
+
+Zoom resets when a new pop-up or live view opens. On macOS, a trackpad pinch
+resizes the window, like Ctrl + scroll.
+
 ### Updates
 
 Peek can check GitHub for new releases and update from inside the app. This is

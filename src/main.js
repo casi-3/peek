@@ -27,7 +27,8 @@ let prefs = null
 let pendingUpdate = null
 let appStarted = false
 let placementMode = false
-let dynamicWidth = null
+let dynamicAspect = null
+let scaleSaveTimer = null
 let frigatePin = null
 let frigateToken = null
 let tokenRefreshTimer = null
@@ -52,6 +53,8 @@ const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
 const REAUTH_MAX_RETRIES = 3
 const DEFAULT_LIVE_HOTKEY = 'CommandOrControl+Alt+Z'
+const MIN_SIZE_SCALE = 0.5
+const MAX_SIZE_SCALE = 3
 
 const DISMISS_OPTIONS = [
   { label: '3 seconds', value: 3 },
@@ -135,26 +138,41 @@ function overlayDisplay() {
   return screen.getPrimaryDisplay()
 }
 
+function sizeScale() {
+  if (!prefs) return 1
+  return liveView ? prefs.liveScale : prefs.popupScale
+}
+
+// fit below 1 means the screen caps the size, which Ctrl+scroll needs to know.
+function fitToScreen(width, height) {
+  const area = overlayDisplay().workArea
+  const fit = Math.min(1, (area.width * 0.9) / width, (area.height * 0.9) / height)
+  return { width: Math.round(width * fit), height: Math.round(height * fit), fit }
+}
+
 function liveGridSize(count) {
   const inset = 16
-  const tileHeight = (config.height || 300) - inset
+  const tileHeight = (config.height || 300) * sizeScale() - inset
   const tileWidth = Math.round(tileHeight * 16 / 9)
   const cols = Math.ceil(Math.sqrt(count))
   const rows = Math.ceil(count / cols)
   const width = cols * tileWidth + inset
   const height = rows * tileHeight + inset
-  const area = overlayDisplay().workArea
-  const scale = Math.min(1, (area.width * 0.9) / width, (area.height * 0.9) / height)
-  return { width: Math.round(width * scale), height: Math.round(height * scale) }
+  return fitToScreen(width, height)
 }
 
 function overlaySize() {
   if (liveView && liveView.count > 1) return liveGridSize(liveView.count)
-  const height = config.height || 300
-  if (prefs && prefs.dynamicSize !== false && dynamicWidth) {
-    return { width: dynamicWidth, height }
+  const scale = sizeScale()
+  const height = Math.round((config.height || 300) * scale)
+  if (prefs && prefs.dynamicSize !== false && dynamicAspect) {
+    const inset = 16
+    const min = Math.round(height * 0.6)
+    const max = Math.round(height * 3.2)
+    const width = Math.max(min, Math.min(max, Math.round((height - inset) * dynamicAspect) + inset))
+    return fitToScreen(width, height)
   }
-  return { width: config.width || 380, height }
+  return fitToScreen(Math.round((config.width || 380) * scale), height)
 }
 
 function positionWindow() {
@@ -185,18 +203,50 @@ function positionWindow() {
   win.setBounds({ x, y, width, height })
 }
 
-function setDynamicWidth(aspect) {
+function setDynamicAspect(aspect) {
   if (!prefs || prefs.dynamicSize === false) return
   if (!aspect || !isFinite(aspect) || aspect <= 0) return
-  const height = config.height || 300
-  const inset = 16
-  const innerHeight = height - inset
-  const min = Math.round(height * 0.6)
-  const max = Math.round(height * 3.2)
-  const width = Math.max(min, Math.min(max, Math.round(innerHeight * aspect) + inset))
-  if (width === dynamicWidth) return
-  dynamicWidth = width
+  const before = overlaySize()
+  dynamicAspect = aspect
+  const after = overlaySize()
+  if (after.width === before.width && after.height === before.height) return
   if (win && !win.isDestroyed() && !placementMode) positionWindow()
+}
+
+function clearDynamicAspect() {
+  dynamicAspect = null
+  if (win && !win.isDestroyed()) positionWindow()
+}
+
+function scaleOverlay(factor) {
+  if (!prefs || placementMode || !win || win.isDestroyed()) return
+  if (typeof factor !== 'number' || !isFinite(factor) || factor <= 0) return
+  const { fit } = overlaySize()
+  if (factor > 1 && fit < 1) return
+  const key = liveView ? 'liveScale' : 'popupScale'
+  // Starts from the size on screen, so shrinking a capped grid shows on the first notch.
+  const next = Math.max(MIN_SIZE_SCALE, Math.min(MAX_SIZE_SCALE, prefs[key] * fit * factor))
+  if (next === prefs[key]) return
+  prefs[key] = next
+  positionWindow()
+  clearTimeout(scaleSaveTimer)
+  scaleSaveTimer = setTimeout(() => {
+    savePrefs()
+    buildMenu()
+  }, 500)
+}
+
+function resetSize() {
+  clearTimeout(scaleSaveTimer)
+  prefs.popupScale = 1
+  prefs.liveScale = 1
+  savePrefs()
+  if (win && !win.isDestroyed() && !placementMode) positionWindow()
+  buildMenu()
+}
+
+function validSizeScale(value) {
+  return Number.isFinite(value) ? Math.max(MIN_SIZE_SCALE, Math.min(MAX_SIZE_SCALE, value)) : 1
 }
 
 function enterPlacement() {
@@ -296,6 +346,8 @@ function defaultPrefs() {
     liveHotkey: DEFAULT_LIVE_HOTKEY,
     liveCameras: {},
     zoneFilter: [],
+    popupScale: 1,
+    liveScale: 1,
     skipVersion: '',
     lastNotify: { version: '', at: 0 }
   }
@@ -321,6 +373,8 @@ function loadPrefs() {
     liveHotkey: typeof saved.liveHotkey === 'string' ? saved.liveHotkey : base.liveHotkey,
     liveCameras: Object.assign({}, base.liveCameras, saved.liveCameras),
     zoneFilter: normalizeZoneFilter(saved.zoneFilter),
+    popupScale: validSizeScale(saved.popupScale),
+    liveScale: validSizeScale(saved.liveScale),
     skipVersion: saved.skipVersion != null ? saved.skipVersion : base.skipVersion,
     lastNotify: saved.lastNotify != null ? saved.lastNotify : base.lastNotify
   }
@@ -366,10 +420,7 @@ function applyRuntimePrefs(opts) {
   if (typeof opts.showBoundingBoxes === 'boolean') prefs.showBoundingBoxes = opts.showBoundingBoxes
   if (typeof opts.dynamicSize === 'boolean') {
     prefs.dynamicSize = opts.dynamicSize
-    if (!prefs.dynamicSize) {
-      dynamicWidth = null
-      if (win && !win.isDestroyed()) positionWindow()
-    }
+    if (!prefs.dynamicSize) clearDynamicAspect()
   }
   if (typeof opts.dismissOnStationary === 'boolean') prefs.dismissOnStationary = opts.dismissOnStationary
   if (opts.cameras && typeof opts.cameras === 'object') {
@@ -655,10 +706,7 @@ function buildMenu() {
       checked: prefs.dynamicSize !== false,
       click: (item) => {
         prefs.dynamicSize = item.checked
-        if (!item.checked) {
-          dynamicWidth = null
-          if (win && !win.isDestroyed()) positionWindow()
-        }
+        if (!item.checked) clearDynamicAspect()
         savePrefs()
       }
     },
@@ -684,6 +732,7 @@ function buildMenu() {
     { type: 'separator' },
     { label: 'Set overlay position…', click: () => enterPlacement() },
     ...(config && config.placement ? [{ label: 'Reset overlay position', click: () => resetPlacement() }] : []),
+    ...(prefs.popupScale !== 1 || prefs.liveScale !== 1 ? [{ label: 'Reset overlay size', click: () => resetSize() }] : []),
     { type: 'separator' },
     { label: 'Check for updates…', click: () => checkForUpdates(true) },
     {
@@ -1237,7 +1286,8 @@ app.whenReady().then(() => {
   })
   ipcMain.on('placement-save', () => exitPlacement(true))
   ipcMain.on('placement-cancel', () => exitPlacement(false))
-  ipcMain.on('overlay-resize', (e, aspect) => setDynamicWidth(aspect))
+  ipcMain.on('overlay-resize', (e, aspect) => setDynamicAspect(aspect))
+  ipcMain.on('overlay-scale', (e, factor) => scaleOverlay(factor))
   ipcMain.handle('setup-load', () => readConfig())
   ipcMain.handle('setup-test', (e, cfg) => testConnection(cfg))
   ipcMain.handle('setup-load-prefs', () => {
