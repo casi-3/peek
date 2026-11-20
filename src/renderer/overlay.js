@@ -34,6 +34,7 @@ const closeBtn = document.getElementById('close')
 const placementEl = document.getElementById('placement')
 const placementLock = document.getElementById('placement-lock')
 const placementCancel = document.getElementById('placement-cancel')
+const gridEl = document.getElementById('grid')
 
 const activeEvents = new Map()
 const colorMap = new Map()
@@ -48,8 +49,67 @@ let streamWatchdog = null
 let streamPlaying = false
 let streamFailed = false
 let posterFailed = false
+let hideTimer = null
+let liveTiles = []
 
 const STREAM_TIMEOUT_MS = 8000
+const MAX_ZOOM = 8
+const ZOOM_RATE = 0.0015
+const RESIZE_RATE = 0.001
+const DRAG_THRESHOLD_PX = 4
+const DBLCLICK_WAIT_MS = 250
+
+function createZoom(el) {
+  let scale = 1
+  let tx = 0
+  let ty = 0
+
+  function apply() {
+    if (scale <= 1) {
+      scale = 1
+      tx = 0
+      ty = 0
+      el.style.transform = ''
+      el.classList.remove('zoomed')
+      return
+    }
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    tx = Math.min(0, Math.max(w - w * scale, tx))
+    ty = Math.min(0, Math.max(h - h * scale, ty))
+    el.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`
+    el.classList.add('zoomed')
+  }
+
+  return {
+    el,
+    get scale() { return scale },
+    get zoomed() { return scale > 1 },
+    zoomAt(factor, mx, my) {
+      let next = Math.min(MAX_ZOOM, scale * factor)
+      if (next < 1.001) next = 1
+      tx = mx - (mx - tx) * next / scale
+      ty = my - (my - ty) * next / scale
+      scale = next
+      apply()
+    },
+    panBy(dx, dy) {
+      tx += dx
+      ty += dy
+      apply()
+    },
+    refit: apply,
+    reset() {
+      scale = 1
+      apply()
+    }
+  }
+}
+
+const videoZoom = createZoom(videoBox)
+let drag = null
+let suppressClick = false
+let pendingClick = null
 
 function assignColor(id) {
   if (!colorMap.has(id)) {
@@ -144,9 +204,9 @@ function drawBoxes() {
     bboxCtx.beginPath()
     bboxCtx.roundRect(cx, cy, bw, bh, r)
     bboxCtx.shadowColor = 'rgba(0,0,0,0.75)'
-    bboxCtx.shadowBlur = 4
+    bboxCtx.shadowBlur = 4 / videoZoom.scale
     bboxCtx.strokeStyle = color
-    bboxCtx.lineWidth = 2
+    bboxCtx.lineWidth = 2 / videoZoom.scale
     bboxCtx.stroke()
     bboxCtx.shadowBlur = 0
   }
@@ -189,36 +249,39 @@ function renderDetections() {
   infoEl.style.display = extras.length ? 'block' : 'none'
 }
 
-function applyVideoSettings(muted) {
-  if (!stream) return
-  if (stream.video) {
-    stream.video.muted = muted
-    stream.video.controls = false
-    stream.video.disableRemotePlayback = true
-    stream.video.addEventListener('playing', () => {
-      streamPlaying = true
-      clearTimeout(streamWatchdog)
-      poster.style.opacity = '0'
-      const vw = stream.video.videoWidth
-      const vh = stream.video.videoHeight
-      if (vw && vh) window.overlay.resize(vw / vh)
-      drawBoxes()
-    }, { once: true })
-  } else {
-    requestAnimationFrame(() => applyVideoSettings(muted))
+function createStream(url) {
+  const el = document.createElement('video-stream')
+  el.background = true
+  el.mode = 'webrtc,mse'
+  el.src = url
+  return el
+}
+
+function configureVideo(target, muted, onPlaying) {
+  if (!target.isConnected) return
+  if (!target.video) {
+    requestAnimationFrame(() => configureVideo(target, muted, onPlaying))
+    return
   }
+  target.video.muted = muted
+  target.video.controls = false
+  target.video.disableRemotePlayback = true
+  target.video.addEventListener('playing', () => onPlaying(target.video), { once: true })
 }
 
 function startStream(url, muted) {
   stopStream()
   streamPlaying = false
   streamFailed = false
-  stream = document.createElement('video-stream')
-  stream.background = true
-  stream.mode = 'webrtc,mse'
-  stream.src = url
+  stream = createStream(url)
   videoBox.appendChild(stream)
-  applyVideoSettings(muted)
+  configureVideo(stream, muted, (video) => {
+    streamPlaying = true
+    clearTimeout(streamWatchdog)
+    poster.style.opacity = '0'
+    if (video.videoWidth && video.videoHeight) window.overlay.resize(video.videoWidth / video.videoHeight)
+    drawBoxes()
+  })
   streamWatchdog = setTimeout(() => {
     if (!streamPlaying) {
       streamFailed = true
@@ -236,8 +299,126 @@ function stopStream() {
   }
 }
 
+function freshUrl(url) {
+  return url + (url.includes('?') ? '&' : '?') + 't=' + Date.now()
+}
+
+function stopLive() {
+  for (const tile of liveTiles) {
+    clearTimeout(tile.watchdog)
+    if (tile.stream) {
+      tile.stream.ondisconnect()
+      tile.stream.remove()
+    }
+  }
+  liveTiles = []
+  gridEl.innerHTML = ''
+  gridEl.classList.add('hidden')
+  card.classList.remove('live')
+}
+
+function startTileStream(tile) {
+  clearTimeout(tile.watchdog)
+  if (tile.stream) {
+    tile.stream.ondisconnect()
+    tile.stream.remove()
+  }
+  tile.playing = false
+  tile.failed = false
+  tile.stream = createStream(tile.camera.streamUrl)
+  tile.zoomEl.insertBefore(tile.stream, tile.zoomEl.firstChild)
+  configureVideo(tile.stream, tile.muted, (video) => {
+    tile.playing = true
+    clearTimeout(tile.watchdog)
+    tile.poster.style.opacity = '0'
+    if (liveTiles.length === 1 && video.videoWidth && video.videoHeight) {
+      window.overlay.resize(video.videoWidth / video.videoHeight)
+    }
+  })
+  tile.watchdog = setTimeout(() => {
+    if (!tile.playing) {
+      tile.failed = true
+      window.overlay.streamFailed()
+    }
+  }, STREAM_TIMEOUT_MS)
+}
+
+function loadTilePoster(tile) {
+  tile.posterFailed = false
+  if (tile.camera.poster) {
+    tile.poster.style.opacity = '1'
+    tile.poster.src = freshUrl(tile.camera.poster)
+  } else {
+    tile.poster.style.opacity = '0'
+  }
+}
+
+function buildTile(camera, muted) {
+  const el = document.createElement('div')
+  el.className = 'tile'
+  const zoomEl = document.createElement('div')
+  zoomEl.className = 'tile-zoom'
+  const img = document.createElement('img')
+  img.className = 'tile-poster'
+  img.alt = ''
+  zoomEl.appendChild(img)
+  const name = document.createElement('span')
+  name.className = 'tile-name'
+  name.textContent = camera.name
+  el.append(zoomEl, name)
+  const tile = { camera, muted, el, zoomEl, zoom: createZoom(zoomEl), poster: img, stream: null, watchdog: null, playing: false, failed: false, posterFailed: false }
+  img.addEventListener('error', () => {
+    if (!img.getAttribute('src')) return
+    tile.posterFailed = true
+    window.overlay.streamFailed()
+  })
+  if (camera.clickUrl) el.classList.add('clickable')
+  return tile
+}
+
+function showLive(data) {
+  clearTimeout(dismissTimer)
+  clearTimeout(hideTimer)
+  hideTimer = null
+  resetTimerBar()
+  clearBoxes()
+  stopStream()
+  stopLive()
+  videoZoom.reset()
+  activeEvents.clear()
+  colorMap.clear()
+  colorIndex = 0
+  activeStreamUrl = null
+  activeClickUrl = null
+  lastShownEvent = null
+  card.classList.remove('clickable')
+
+  const count = data.cameras.length
+  const cols = Math.ceil(Math.sqrt(count))
+  gridEl.style.gridTemplateColumns = `repeat(${cols}, 1fr)`
+  gridEl.style.gridTemplateRows = `repeat(${Math.ceil(count / cols)}, 1fr)`
+  gridEl.classList.toggle('single', count === 1)
+  camEl.textContent = count === 1 ? data.cameras[0].name : 'Live view'
+
+  for (const camera of data.cameras) {
+    const tile = buildTile(camera, data.muted)
+    liveTiles.push(tile)
+    gridEl.appendChild(tile.el)
+    loadTilePoster(tile)
+    startTileStream(tile)
+  }
+
+  card.classList.add('live')
+  gridEl.classList.remove('hidden')
+  card.classList.remove('hidden')
+  requestAnimationFrame(() => card.classList.add('show'))
+}
+
 function show(event) {
   clearTimeout(dismissTimer)
+  clearTimeout(hideTimer)
+  hideTimer = null
+  if (card.classList.contains('live')) stopLive()
   lastShownEvent = event
 
   const reuseCard = card.classList.contains('show') && event.streamUrl === activeStreamUrl
@@ -258,6 +439,8 @@ function show(event) {
 
   if (reuseCard) return
 
+  videoZoom.reset()
+  drawBoxes()
   posterFailed = false
   if (event.poster) {
     poster.style.opacity = '1'
@@ -282,8 +465,12 @@ function hide() {
   activeClickUrl = null
   card.classList.remove('clickable')
   card.classList.remove('show')
-  setTimeout(() => {
+  clearTimeout(hideTimer)
+  hideTimer = setTimeout(() => {
+    hideTimer = null
     stopStream()
+    stopLive()
+    videoZoom.reset()
     card.classList.add('hidden')
     window.overlay.hide()
   }, 320)
@@ -318,7 +505,33 @@ poster.addEventListener('error', () => {
   window.overlay.streamFailed()
 })
 
+window.overlay.onLiveOpen((data) => showLive(data))
+
+window.overlay.onLiveClose((opts) => {
+  if (opts.animate) {
+    hide()
+    return
+  }
+  if (!card.classList.contains('live')) return
+  clearTimeout(hideTimer)
+  hideTimer = null
+  stopLive()
+  card.classList.remove('show')
+  card.classList.add('hidden')
+})
+
+window.overlay.onDismiss(() => {
+  if (card.classList.contains('show') && !card.classList.contains('live')) hide()
+})
+
 window.overlay.onReauth(() => {
+  if (card.classList.contains('live')) {
+    for (const tile of liveTiles) {
+      if (tile.posterFailed) loadTilePoster(tile)
+      if (tile.failed) startTileStream(tile)
+    }
+    return
+  }
   if (!card.classList.contains('show') || !lastShownEvent) return
   if (posterFailed && lastShownEvent.poster) {
     posterFailed = false
@@ -335,8 +548,104 @@ closeBtn.addEventListener('click', (e) => {
   hide()
 })
 
-card.addEventListener('click', () => {
-  if (activeClickUrl) window.overlay.openUrl(activeClickUrl)
+function tileAt(target) {
+  const el = target.closest('.tile')
+  return el ? liveTiles.find(t => t.el === el) : null
+}
+
+function zoomFor(target) {
+  if (!card.classList.contains('live')) return videoZoom
+  const tile = tileAt(target)
+  return tile ? tile.zoom : null
+}
+
+function clickUrlFor(target) {
+  if (!card.classList.contains('live')) return activeClickUrl
+  const tile = tileAt(target)
+  return tile ? tile.camera.clickUrl : null
+}
+
+card.addEventListener('wheel', (e) => {
+  e.preventDefault()
+  if (e.ctrlKey) {
+    window.overlay.scaleBy(Math.exp(-e.deltaY * RESIZE_RATE))
+    return
+  }
+  const zoom = zoomFor(e.target)
+  if (!zoom) return
+  const rect = zoom.el.parentElement.getBoundingClientRect()
+  zoom.zoomAt(Math.exp(-e.deltaY * ZOOM_RATE), e.clientX - rect.left, e.clientY - rect.top)
+  if (zoom === videoZoom) drawBoxes()
+}, { passive: false })
+
+card.addEventListener('pointerdown', (e) => {
+  suppressClick = false
+  if (e.button !== 0 || e.target.closest('#close')) return
+  const zoom = zoomFor(e.target)
+  if (!zoom || !zoom.zoomed) return
+  drag = { zoom, id: e.pointerId, x: e.clientX, y: e.clientY, moved: false }
+})
+
+window.addEventListener('pointermove', (e) => {
+  if (!drag || e.pointerId !== drag.id) return
+  const dx = e.clientX - drag.x
+  const dy = e.clientY - drag.y
+  if (!drag.moved) {
+    if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return
+    drag.moved = true
+    card.setPointerCapture(drag.id)
+    card.classList.add('panning')
+  }
+  drag.zoom.panBy(dx, dy)
+  drag.x = e.clientX
+  drag.y = e.clientY
+})
+
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return
+  if (drag.moved) suppressClick = true
+  card.classList.remove('panning')
+  drag = null
+}
+
+card.addEventListener('dragstart', (e) => e.preventDefault())
+
+window.addEventListener('pointerup', endDrag)
+window.addEventListener('pointercancel', endDrag)
+
+card.addEventListener('click', (e) => {
+  if (suppressClick) {
+    suppressClick = false
+    return
+  }
+  if (e.detail > 1) return
+  const url = clickUrlFor(e.target)
+  if (!url) return
+  const zoom = zoomFor(e.target)
+  if (!zoom || !zoom.zoomed) {
+    window.overlay.openUrl(url)
+    return
+  }
+  clearTimeout(pendingClick)
+  pendingClick = setTimeout(() => {
+    pendingClick = null
+    window.overlay.openUrl(url)
+  }, DBLCLICK_WAIT_MS)
+})
+
+card.addEventListener('dblclick', (e) => {
+  clearTimeout(pendingClick)
+  pendingClick = null
+  const zoom = zoomFor(e.target)
+  if (!zoom) return
+  zoom.reset()
+  if (zoom === videoZoom) drawBoxes()
+})
+
+window.addEventListener('resize', () => {
+  videoZoom.refit()
+  for (const tile of liveTiles) tile.zoom.refit()
+  drawBoxes()
 })
 
 window.overlay.onMode((mode) => {

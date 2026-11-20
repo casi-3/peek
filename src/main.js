@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session } = require('electron')
+const { app, BrowserWindow, ipcMain, screen, Tray, Menu, nativeImage, shell, dialog, Notification, session, globalShortcut } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { spawn, execFileSync } = require('child_process')
@@ -27,7 +27,8 @@ let prefs = null
 let pendingUpdate = null
 let appStarted = false
 let placementMode = false
-let dynamicWidth = null
+let dynamicAspect = null
+let scaleSaveTimer = null
 let frigatePin = null
 let frigateToken = null
 let tokenRefreshTimer = null
@@ -38,14 +39,23 @@ let lastReauthAttempt = 0
 let cameraStreamMap = {}
 let cameraDetectMap = {}
 let certProcSet = false
+let liveView = null
+let registeredHotkey = null
+let resumeTimer = null
 const knownCameras = new Set()
 const knownAudioLabels = new Set()
 const activeAudio = new Set()
 const stationaryEvents = new Set()
+const zoneEvents = new Set()
+const knownZones = new Map()
+const knownObjectLabels = new Set()
 const AUDIO_NON_LABELS = new Set(['all', 'dBFS', 'rms', 'transcription', 'set', 'state'])
 const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
 const REAUTH_MAX_RETRIES = 3
+const DEFAULT_LIVE_HOTKEY = 'CommandOrControl+Alt+Z'
+const MIN_SIZE_SCALE = 0.5
+const MAX_SIZE_SCALE = 3
 
 const DISMISS_OPTIONS = [
   { label: '3 seconds', value: 3 },
@@ -54,6 +64,14 @@ const DISMISS_OPTIONS = [
   { label: '15 seconds', value: 15 },
   { label: '30 seconds', value: 30 },
   { label: 'Until dismissed', value: 0 }
+]
+
+const PAUSE_OPTIONS = [
+  { label: '30 minutes', minutes: 30 },
+  { label: '1 hour', minutes: 60 },
+  { label: '3 hours', minutes: 180 },
+  { label: '6 hours', minutes: 360 },
+  { label: 'Rest of today', minutes: null }
 ]
 
 function httpToWs(url) {
@@ -77,6 +95,11 @@ function buildStreamMap(frigateConfig) {
     if (detect && detect.width && detect.height) {
       cameraDetectMap[name] = { width: detect.width, height: detect.height }
     }
+    if (cam && cam.zones && typeof cam.zones === 'object') {
+      Object.keys(cam.zones).forEach(zone => learnZone(zone, name))
+    }
+    const track = cam && cam.objects && cam.objects.track
+    if (Array.isArray(track)) track.forEach(learnObjectLabel)
   }
 }
 
@@ -109,25 +132,64 @@ function clickUrlForEvent(camera, eventId) {
   return `${config.frigateUrl}/explore?event_id=${encodeURIComponent(eventId)}`
 }
 
+function titleCase(name) {
+  return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+}
+
 function prettyName(camera) {
   if (config.cameras && config.cameras[camera]) return config.cameras[camera]
-  return camera.replace(/[_-]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+  return titleCase(camera)
+}
+
+function overlayDisplay() {
+  const placement = config.placement
+  if (placement && placement.displayId != null) {
+    return screen.getAllDisplays().find(d => d.id === placement.displayId) || screen.getPrimaryDisplay()
+  }
+  return screen.getPrimaryDisplay()
+}
+
+function sizeScale() {
+  if (!prefs) return 1
+  return liveView ? prefs.liveScale : prefs.popupScale
+}
+
+function fitToScreen(width, height) {
+  const area = overlayDisplay().workArea
+  const fit = Math.min(1, (area.width * 0.9) / width, (area.height * 0.9) / height)
+  return { width: Math.round(width * fit), height: Math.round(height * fit), fit }
+}
+
+function liveGridSize(count) {
+  const inset = 16
+  const tileHeight = (config.height || 300) * sizeScale() - inset
+  const tileWidth = Math.round(tileHeight * 16 / 9)
+  const cols = Math.ceil(Math.sqrt(count))
+  const rows = Math.ceil(count / cols)
+  const width = cols * tileWidth + inset
+  const height = rows * tileHeight + inset
+  return fitToScreen(width, height)
 }
 
 function overlaySize() {
-  const height = config.height || 300
-  if (prefs && prefs.dynamicSize !== false && dynamicWidth) {
-    return { width: dynamicWidth, height }
+  if (liveView && liveView.count > 1) return liveGridSize(liveView.count)
+  const scale = sizeScale()
+  const height = Math.round((config.height || 300) * scale)
+  if (prefs && prefs.dynamicSize !== false && dynamicAspect) {
+    const inset = 16
+    const min = Math.round(height * 0.6)
+    const max = Math.round(height * 3.2)
+    const width = Math.max(min, Math.min(max, Math.round((height - inset) * dynamicAspect) + inset))
+    return fitToScreen(width, height)
   }
-  return { width: config.width || 380, height }
+  return fitToScreen(Math.round((config.width || 380) * scale), height)
 }
 
 function positionWindow() {
   const { width, height } = overlaySize()
   const placement = config.placement
   if (placement && placement.displayId != null) {
-    const display = screen.getAllDisplays().find(d => d.id === placement.displayId) || screen.getPrimaryDisplay()
-    const area = display.workArea
+    const area = overlayDisplay().workArea
     const anchorX = placement.anchorX === 'right' ? 'right' : 'left'
     const anchorY = placement.anchorY === 'bottom' ? 'bottom' : 'top'
     let x = anchorX === 'right'
@@ -151,22 +213,57 @@ function positionWindow() {
   win.setBounds({ x, y, width, height })
 }
 
-function setDynamicWidth(aspect) {
+function setDynamicAspect(aspect) {
   if (!prefs || prefs.dynamicSize === false) return
   if (!aspect || !isFinite(aspect) || aspect <= 0) return
-  const height = config.height || 300
-  const inset = 16
-  const innerHeight = height - inset
-  const min = Math.round(height * 0.6)
-  const max = Math.round(height * 3.2)
-  const width = Math.max(min, Math.min(max, Math.round(innerHeight * aspect) + inset))
-  if (width === dynamicWidth) return
-  dynamicWidth = width
+  const before = overlaySize()
+  dynamicAspect = aspect
+  const after = overlaySize()
+  if (after.width === before.width && after.height === before.height) return
   if (win && !win.isDestroyed() && !placementMode) positionWindow()
+}
+
+function clearDynamicAspect() {
+  dynamicAspect = null
+  if (win && !win.isDestroyed()) positionWindow()
+}
+
+function scaleOverlay(factor) {
+  if (!prefs || placementMode || !win || win.isDestroyed()) return
+  if (typeof factor !== 'number' || !isFinite(factor) || factor <= 0) return
+  const { fit } = overlaySize()
+  if (factor > 1 && fit < 1) return
+  const key = liveView ? 'liveScale' : 'popupScale'
+  const next = Math.max(MIN_SIZE_SCALE, Math.min(MAX_SIZE_SCALE, prefs[key] * fit * factor))
+  if (next === prefs[key]) return
+  prefs[key] = next
+  positionWindow()
+  clearTimeout(scaleSaveTimer)
+  scaleSaveTimer = setTimeout(() => {
+    savePrefs()
+    buildMenu()
+  }, 500)
+}
+
+function resetSize() {
+  clearTimeout(scaleSaveTimer)
+  prefs.popupScale = 1
+  prefs.liveScale = 1
+  savePrefs()
+  if (win && !win.isDestroyed() && !placementMode) positionWindow()
+  buildMenu()
+}
+
+function validSizeScale(value) {
+  return Number.isFinite(value) ? Math.max(MIN_SIZE_SCALE, Math.min(MAX_SIZE_SCALE, value)) : 1
 }
 
 function enterPlacement() {
   if (!win || win.isDestroyed()) return
+  if (liveView) {
+    liveView = null
+    win.webContents.send('live-close', { animate: false })
+  }
   placementMode = true
   positionWindow()
   win.setMovable(true)
@@ -255,6 +352,13 @@ function defaultPrefs() {
     autoUpdate: false,
     showDock: false,
     openAtLogin: false,
+    liveHotkey: DEFAULT_LIVE_HOTKEY,
+    liveCameras: {},
+    zoneFilter: [],
+    zoneLabels: {},
+    pausedUntil: 0,
+    popupScale: 1,
+    liveScale: 1,
     skipVersion: '',
     lastNotify: { version: '', at: 0 }
   }
@@ -277,15 +381,95 @@ function loadPrefs() {
     autoUpdate: saved.autoUpdate != null ? saved.autoUpdate : base.autoUpdate,
     showDock: saved.showDock != null ? saved.showDock : base.showDock,
     openAtLogin: saved.openAtLogin != null ? saved.openAtLogin : base.openAtLogin,
+    liveHotkey: typeof saved.liveHotkey === 'string' ? saved.liveHotkey : base.liveHotkey,
+    liveCameras: Object.assign({}, base.liveCameras, saved.liveCameras),
+    zoneFilter: normalizeZoneFilter(saved.zoneFilter),
+    zoneLabels: normalizeZoneLabels(saved.zoneLabels),
+    pausedUntil: Number.isFinite(saved.pausedUntil) ? saved.pausedUntil : base.pausedUntil,
+    popupScale: validSizeScale(saved.popupScale),
+    liveScale: validSizeScale(saved.liveScale),
     skipVersion: saved.skipVersion != null ? saved.skipVersion : base.skipVersion,
     lastNotify: saved.lastNotify != null ? saved.lastNotify : base.lastNotify
   }
   Object.keys(prefs.cameras).forEach(c => knownCameras.add(c))
   Object.keys(prefs.audioLabels).forEach(l => knownAudioLabels.add(l))
+  const savedZones = new Set([...prefs.zoneFilter, ...Object.keys(prefs.zoneLabels)])
+  savedZones.forEach(z => knownZones.set(z, { name: z, cameras: new Set() }))
+  Object.values(prefs.zoneLabels).forEach(list => list.forEach(l => knownObjectLabels.add(l)))
+}
+
+function normalizeZoneFilter(list) {
+  if (!Array.isArray(list)) return []
+  return [...new Set(list.filter(z => typeof z === 'string' && z.trim()).map(z => z.trim().toLowerCase()))]
+}
+
+function setZoneFilter(list) {
+  prefs.zoneFilter = normalizeZoneFilter(list)
+  zoneEvents.clear()
+}
+
+function normalizeZoneLabels(map) {
+  const out = {}
+  if (!map || typeof map !== 'object' || Array.isArray(map)) return out
+  for (const [zone, labels] of Object.entries(map)) {
+    const key = typeof zone === 'string' ? zone.trim().toLowerCase() : ''
+    const list = normalizeZoneFilter(labels)
+    if (key && list.length) out[key] = list
+  }
+  return out
+}
+
+function setZoneLabels(key, labels) {
+  const list = normalizeZoneFilter(labels)
+  if (list.length) prefs.zoneLabels[key] = list
+  else delete prefs.zoneLabels[key]
+  zoneEvents.clear()
 }
 
 function savePrefs() {
   writePrefs(prefs)
+}
+
+function isPaused() {
+  return prefs.pausedUntil > Date.now()
+}
+
+function endOfToday() {
+  const d = new Date()
+  d.setHours(24, 0, 0, 0)
+  return d.getTime()
+}
+
+function pausedUntilText() {
+  return new Date(prefs.pausedUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+function schedulePauseEnd() {
+  clearTimeout(resumeTimer)
+  resumeTimer = null
+  if (!isPaused()) return
+  resumeTimer = setTimeout(() => {
+    resumeTimer = null
+    if (isPaused()) schedulePauseEnd()
+    else buildMenu()
+  }, prefs.pausedUntil - Date.now())
+}
+
+function pauseUntil(ts) {
+  prefs.pausedUntil = ts
+  savePrefs()
+  schedulePauseEnd()
+  if (win && !win.isDestroyed() && win.isVisible() && !liveView && !placementMode) {
+    win.webContents.send('overlay-dismiss')
+  }
+  buildMenu()
+}
+
+function resumeNow() {
+  prefs.pausedUntil = 0
+  savePrefs()
+  schedulePauseEnd()
+  buildMenu()
 }
 
 function supportsOpenAtLogin() {
@@ -311,10 +495,7 @@ function applyRuntimePrefs(opts) {
   if (typeof opts.showBoundingBoxes === 'boolean') prefs.showBoundingBoxes = opts.showBoundingBoxes
   if (typeof opts.dynamicSize === 'boolean') {
     prefs.dynamicSize = opts.dynamicSize
-    if (!prefs.dynamicSize) {
-      dynamicWidth = null
-      if (win && !win.isDestroyed()) positionWindow()
-    }
+    if (!prefs.dynamicSize) clearDynamicAspect()
   }
   if (typeof opts.dismissOnStationary === 'boolean') prefs.dismissOnStationary = opts.dismissOnStationary
   if (opts.cameras && typeof opts.cameras === 'object') {
@@ -327,6 +508,21 @@ function applyRuntimePrefs(opts) {
       prefs.audioLabels[name] = !!on
     }
   }
+  if (opts.liveCameras && typeof opts.liveCameras === 'object') {
+    for (const [name, on] of Object.entries(opts.liveCameras)) {
+      prefs.liveCameras[name] = !!on
+    }
+  }
+  if (Array.isArray(opts.zoneFilter)) setZoneFilter(opts.zoneFilter)
+  if (opts.zoneLabels && typeof opts.zoneLabels === 'object') {
+    for (const [zone, labels] of Object.entries(opts.zoneLabels)) {
+      if (Array.isArray(labels)) setZoneLabels(zone.toLowerCase(), labels)
+    }
+  }
+  if (typeof opts.liveHotkey === 'string' && opts.liveHotkey !== prefs.liveHotkey) {
+    prefs.liveHotkey = opts.liveHotkey
+    applyHotkey(prefs.liveHotkey)
+  }
 }
 
 function cameraEnabled(camera) {
@@ -335,6 +531,83 @@ function cameraEnabled(camera) {
 
 function audioLabelEnabled(label) {
   return prefs.audioLabels[label] !== false
+}
+
+function liveCameraEnabled(camera) {
+  return prefs.liveCameras[camera] !== false
+}
+
+function liveClickUrl(camera) {
+  return prefs.clickAction === 'disabled' ? null : `${config.frigateUrl}/#${camera}`
+}
+
+function openLiveView() {
+  if (placementMode || !win || win.isDestroyed()) return
+  const cameras = [...knownCameras].sort().filter(liveCameraEnabled)
+  if (!cameras.length) {
+    if (Notification.isSupported()) {
+      new Notification({ title: 'Peek', body: 'No cameras for live view yet. Pick some under Live view cameras.' }).show()
+    }
+    return
+  }
+  liveView = { count: cameras.length }
+  positionWindow()
+  win.showInactive()
+  win.webContents.send('live-open', {
+    muted: cameras.length > 1 || !prefs.sound,
+    cameras: cameras.map(camera => ({
+      id: camera,
+      name: prettyName(camera),
+      streamUrl: streamUrl(camera),
+      poster: prefs.snapshot ? snapshotUrl(camera) : null,
+      clickUrl: liveClickUrl(camera)
+    }))
+  })
+}
+
+function toggleLiveView() {
+  if (liveView) {
+    if (win && !win.isDestroyed()) win.webContents.send('live-close', { animate: true })
+    return
+  }
+  openLiveView()
+}
+
+function applyHotkey(accelerator) {
+  if (registeredHotkey) {
+    globalShortcut.unregister(registeredHotkey)
+    registeredHotkey = null
+  }
+  if (accelerator) {
+    try {
+      if (globalShortcut.register(accelerator, toggleLiveView)) {
+        registeredHotkey = accelerator
+      } else {
+        console.error('[peek] live view shortcut ' + accelerator + ' is in use by another app')
+      }
+    } catch (err) {
+      console.error('[peek] invalid live view shortcut ' + accelerator + ': ' + err.message)
+    }
+  }
+  buildMenu()
+  return registeredHotkey === accelerator
+}
+
+function hotkeyAvailable(accelerator) {
+  if (!accelerator) return true
+  try {
+    const ok = globalShortcut.register(accelerator, () => {})
+    if (ok) globalShortcut.unregister(accelerator)
+    return ok
+  } catch (err) {
+    return false
+  }
+}
+
+function revealOverlay() {
+  liveView = null
+  positionWindow()
+  win.showInactive()
 }
 
 function learnCamera(camera) {
@@ -348,6 +621,77 @@ function learnAudioLabel(label) {
   if (knownAudioLabels.has(label)) return
   knownAudioLabels.add(label)
   if (prefs.audioLabels[label] == null) prefs.audioLabels[label] = true
+  buildMenu()
+}
+
+function learnZone(zone, camera) {
+  if (typeof zone !== 'string' || !zone) return
+  const key = zone.toLowerCase()
+  let entry = knownZones.get(key)
+  let changed = false
+  if (!entry) {
+    entry = { name: zone, cameras: new Set() }
+    knownZones.set(key, entry)
+    changed = true
+  } else if (entry.name === key && zone !== key) {
+    entry.name = zone
+    changed = true
+  }
+  if (camera && !entry.cameras.has(camera)) {
+    entry.cameras.add(camera)
+    changed = true
+  }
+  if (changed) buildMenu()
+}
+
+function zoneLabel(key) {
+  const entry = knownZones.get(key)
+  const name = titleCase((entry && entry.name) || key)
+  const cameras = entry ? [...entry.cameras].sort().map(prettyName) : []
+  return cameras.length ? `${name} (${cameras.join(', ')})` : name
+}
+
+function learnObjectLabel(label) {
+  if (typeof label !== 'string' || !label) return
+  const key = label.toLowerCase()
+  if (knownObjectLabels.has(key)) return
+  knownObjectLabels.add(key)
+  buildMenu()
+}
+
+function zoneAllowsLabel(key, label) {
+  if (!prefs.zoneFilter.includes(key)) return false
+  const allowed = prefs.zoneLabels[key]
+  return !allowed || allowed.includes(String(label).toLowerCase())
+}
+
+function eventInSelectedZone(after) {
+  const zones = [...(after.current_zones || []), ...(after.entered_zones || [])]
+  return zones.some(z => typeof z === 'string' && zoneAllowsLabel(z.toLowerCase(), after.label))
+}
+
+function zoneObjectLabels(key) {
+  return [...new Set([...knownObjectLabels, ...(prefs.zoneLabels[key] || [])])].sort()
+}
+
+function zoneObjectsSummary(key) {
+  const allowed = prefs.zoneLabels[key]
+  return allowed ? allowed.map(titleCase).join(', ') : 'Any object'
+}
+
+function toggleZoneLabel(key, label, on) {
+  const next = (prefs.zoneLabels[key] || []).filter(l => l !== label)
+  if (on) next.push(label)
+  setZoneLabels(key, next)
+  savePrefs()
+  buildMenu()
+}
+
+function toggleZone(key, on) {
+  const next = prefs.zoneFilter.filter(z => z !== key)
+  if (on) next.push(key)
+  setZoneFilter(next)
+  savePrefs()
   buildMenu()
 }
 
@@ -378,6 +722,74 @@ function buildMenu() {
     audioLabelItems.push({ label: 'Waiting for audio events…', enabled: false })
   }
 
+  const liveCameraItems = [...knownCameras].sort().map(camera => ({
+    label: prettyName(camera),
+    type: 'checkbox',
+    checked: liveCameraEnabled(camera),
+    click: (item) => {
+      prefs.liveCameras[camera] = item.checked
+      savePrefs()
+    }
+  }))
+  if (liveCameraItems.length === 0) {
+    liveCameraItems.push({ label: 'Waiting for cameras…', enabled: false })
+  }
+
+  const zoneItems = [
+    {
+      label: 'Anywhere (no zone filter)',
+      type: 'checkbox',
+      checked: prefs.zoneFilter.length === 0,
+      click: () => {
+        setZoneFilter([])
+        savePrefs()
+        buildMenu()
+      }
+    },
+    { type: 'separator' },
+    ...[...knownZones.keys()].sort().map(key => ({
+      label: zoneLabel(key),
+      type: 'checkbox',
+      checked: prefs.zoneFilter.includes(key),
+      click: (item) => toggleZone(key, item.checked)
+    }))
+  ]
+  if (knownZones.size === 0) {
+    zoneItems.push({ label: 'No zones found in Frigate', enabled: false })
+  }
+  const pickedZones = prefs.zoneFilter.filter(key => knownZones.has(key)).sort()
+  if (pickedZones.length) {
+    zoneItems.push({ type: 'separator' })
+    pickedZones.forEach(key => {
+      const entry = knownZones.get(key)
+      const labels = zoneObjectLabels(key)
+      zoneItems.push({
+        label: `Objects in ${titleCase(entry.name || key)}: ${zoneObjectsSummary(key)}`,
+        submenu: [
+          {
+            label: 'Any object',
+            type: 'checkbox',
+            checked: !prefs.zoneLabels[key],
+            click: () => {
+              setZoneLabels(key, [])
+              savePrefs()
+              buildMenu()
+            }
+          },
+          { type: 'separator' },
+          ...(labels.length
+            ? labels.map(label => ({
+                label: titleCase(label),
+                type: 'checkbox',
+                checked: !!(prefs.zoneLabels[key] && prefs.zoneLabels[key].includes(label)),
+                click: (item) => toggleZoneLabel(key, label, item.checked)
+              }))
+            : [{ label: 'No objects found in Frigate', enabled: false }])
+        ]
+      })
+    })
+  }
+
   const dismissItems = DISMISS_OPTIONS.map(opt => ({
     label: opt.label,
     type: 'radio',
@@ -388,9 +800,25 @@ function buildMenu() {
     }
   }))
 
+  const pauseOptionItems = PAUSE_OPTIONS.map(opt => ({
+    label: opt.label,
+    click: () => pauseUntil(opt.minutes == null ? endOfToday() : Date.now() + opt.minutes * 60 * 1000)
+  }))
+  const paused = isPaused()
+  const pauseItems = paused
+    ? [
+        { label: `Paused until ${pausedUntilText()}`, enabled: false },
+        { label: 'Resume pop-ups', click: () => resumeNow() },
+        { label: 'Pause pop-ups', submenu: pauseOptionItems }
+      ]
+    : [{ label: 'Pause pop-ups', submenu: pauseOptionItems }]
+
   const menu = Menu.buildFromTemplate([
+    ...pauseItems,
+    { type: 'separator' },
     { label: 'Cameras', submenu: cameraItems },
     { label: 'Audio labels', submenu: audioLabelItems },
+    { label: 'Only pop up in zones', submenu: zoneItems },
     {
       label: 'Sound',
       type: 'checkbox',
@@ -433,10 +861,7 @@ function buildMenu() {
       checked: prefs.dynamicSize !== false,
       click: (item) => {
         prefs.dynamicSize = item.checked
-        if (!item.checked) {
-          dynamicWidth = null
-          if (win && !win.isDestroyed()) positionWindow()
-        }
+        if (!item.checked) clearDynamicAspect()
         savePrefs()
       }
     },
@@ -452,8 +877,17 @@ function buildMenu() {
     },
     { label: 'Dismiss after', submenu: dismissItems },
     { type: 'separator' },
+    {
+      label: 'Show live view',
+      accelerator: registeredHotkey || undefined,
+      registerAccelerator: false,
+      click: () => toggleLiveView()
+    },
+    { label: 'Live view cameras', submenu: liveCameraItems },
+    { type: 'separator' },
     { label: 'Set overlay position…', click: () => enterPlacement() },
     ...(config && config.placement ? [{ label: 'Reset overlay position', click: () => resetPlacement() }] : []),
+    ...(prefs.popupScale !== 1 || prefs.liveScale !== 1 ? [{ label: 'Reset overlay size', click: () => resetSize() }] : []),
     { type: 'separator' },
     { label: 'Check for updates…', click: () => checkForUpdates(true) },
     {
@@ -470,7 +904,10 @@ function buildMenu() {
     { label: 'Quit', role: 'quit' }
   ])
 
-  if (tray) tray.setContextMenu(menu)
+  if (tray) {
+    tray.setContextMenu(menu)
+    tray.setToolTip(paused ? `Peek (paused until ${pausedUntilText()})` : 'Peek')
+  }
 }
 
 function createTray() {
@@ -492,7 +929,29 @@ function handleEvent(data) {
   const labels = config.labels || []
   if (labels.length && !labels.includes(after.label)) return
 
+  ;[...(after.current_zones || []), ...(after.entered_zones || [])].forEach(z => learnZone(z, after.camera))
+  learnObjectLabel(after.label)
+
+  if (isPaused()) {
+    if (data.type === 'end') {
+      zoneEvents.delete(after.id)
+      stationaryEvents.delete(after.id)
+    }
+    return
+  }
+
   let type = data.type
+  let zoneEntered = false
+  if (prefs.zoneFilter.length) {
+    if (zoneEvents.has(after.id)) {
+      if (type === 'end') zoneEvents.delete(after.id)
+    } else {
+      if (type === 'end' || !eventInSelectedZone(after)) return
+      type = 'new'
+      zoneEntered = true
+    }
+  }
+
   if (prefs.dismissOnStationary !== false) {
     if (type === 'end') {
       stationaryEvents.delete(after.id)
@@ -511,6 +970,7 @@ function handleEvent(data) {
   const score = Math.max(after.score || 0, after.top_score || 0)
   const minScore = config.minScore != null ? config.minScore : 0.6
   if (type === 'new' && score < minScore) return
+  if (zoneEntered) zoneEvents.add(after.id)
 
   const subLabel = Array.isArray(after.sub_label) ? after.sub_label[0] : after.sub_label
   const event = {
@@ -532,10 +992,7 @@ function handleEvent(data) {
   }
 
   if (!win || win.isDestroyed()) return
-  if (type === 'new') {
-    positionWindow()
-    win.showInactive()
-  }
+  if (type === 'new') revealOverlay()
   win.webContents.send('frigate-event', event)
 }
 
@@ -543,6 +1000,8 @@ function emitAudioEvent(type, camera, label) {
   if (placementMode) return
   if (!win || win.isDestroyed()) return
   if (!cameraEnabled(camera) || !audioLabelEnabled(label)) return
+  if (type === 'new' && prefs.zoneFilter.length) return
+  if (type === 'new' && isPaused()) return
 
   const id = `audio-${camera}-${label}`
   const event = {
@@ -563,10 +1022,7 @@ function emitAudioEvent(type, camera, label) {
     showAllObjectsInFrame: prefs.showAllObjectsInFrame !== false
   }
 
-  if (type === 'new') {
-    positionWindow()
-    win.showInactive()
-  }
+  if (type === 'new') revealOverlay()
   win.webContents.send('frigate-event', event)
 }
 
@@ -717,9 +1173,11 @@ function requestReauth() {
 function startApp() {
   appStarted = true
   loadPrefs()
+  schedulePauseEnd()
   applyOpenAtLogin(prefs.openAtLogin)
   createWindow()
   createTray()
+  applyHotkey(prefs.liveHotkey)
   initFrigateAuth().then(() => fetchFrigateConfig(frigateToken))
   startMqtt()
 }
@@ -748,6 +1206,9 @@ function openSetup() {
   setupWin.on('closed', () => {
     const wasStarted = appStarted
     setupWin = null
+    if (registeredHotkey && !globalShortcut.isRegistered(registeredHotkey)) {
+      globalShortcut.register(registeredHotkey, toggleLiveView)
+    }
     if (!wasStarted) app.quit()
   })
 }
@@ -974,9 +1435,14 @@ app.whenReady().then(() => {
   powerMonitor.on('resume', () => {
     if (mqttClient) mqttClient.reconnect()
     initFrigateAuth()
+    if (prefs) {
+      schedulePauseEnd()
+      buildMenu()
+    }
   })
 
   ipcMain.on('overlay-hide', () => {
+    liveView = null
     if (win && !win.isDestroyed()) win.hide()
   })
   ipcMain.on('overlay-stream-failed', () => {
@@ -989,13 +1455,17 @@ app.whenReady().then(() => {
   })
   ipcMain.on('placement-save', () => exitPlacement(true))
   ipcMain.on('placement-cancel', () => exitPlacement(false))
-  ipcMain.on('overlay-resize', (e, aspect) => setDynamicWidth(aspect))
+  ipcMain.on('overlay-resize', (e, aspect) => setDynamicAspect(aspect))
+  ipcMain.on('overlay-scale', (e, factor) => scaleOverlay(factor))
   ipcMain.handle('setup-load', () => readConfig())
   ipcMain.handle('setup-test', (e, cfg) => testConnection(cfg))
   ipcMain.handle('setup-load-prefs', () => {
     const p = prefs || readPrefs()
     const cameras = appStarted
       ? [...knownCameras].sort().map(name => ({ name, label: prettyName(name), enabled: cameraEnabled(name) }))
+      : []
+    const liveCameras = appStarted
+      ? [...knownCameras].sort().map(name => ({ name, label: prettyName(name), enabled: liveCameraEnabled(name) }))
       : []
     return {
       autoUpdate: !!(p && p.autoUpdate),
@@ -1011,7 +1481,23 @@ app.whenReady().then(() => {
       showBoundingBoxes: p && p.showBoundingBoxes !== false,
       dynamicSize: p && p.dynamicSize !== false,
       dismissOnStationary: p && p.dismissOnStationary !== false,
-      cameras
+      liveHotkey: p && typeof p.liveHotkey === 'string' ? p.liveHotkey : DEFAULT_LIVE_HOTKEY,
+      cameras,
+      liveCameras,
+      zones: appStarted
+        ? [...knownZones.keys()].sort().map(key => ({ name: key, label: zoneLabel(key), enabled: prefs.zoneFilter.includes(key) }))
+        : [],
+      zoneObjects: appStarted
+        ? [...knownZones.keys()].sort().map(key => ({
+            zone: key,
+            label: titleCase(knownZones.get(key).name || key),
+            objects: zoneObjectLabels(key).map(name => ({
+              name,
+              label: titleCase(name),
+              enabled: !!(prefs.zoneLabels[key] && prefs.zoneLabels[key].includes(name))
+            }))
+          }))
+        : []
     }
   })
   ipcMain.handle('setup-save', (e, cfg, opts) => {
@@ -1063,6 +1549,15 @@ app.whenReady().then(() => {
     }
     return { ok: true }
   })
+  ipcMain.handle('setup-check-hotkey', (e, accelerator) => hotkeyAvailable(accelerator))
+  ipcMain.on('setup-hotkey-capture', (e, capturing) => {
+    if (!appStarted || !registeredHotkey) return
+    if (capturing) {
+      globalShortcut.unregister(registeredHotkey)
+    } else if (!globalShortcut.isRegistered(registeredHotkey)) {
+      globalShortcut.register(registeredHotkey, toggleLiveView)
+    }
+  })
   ipcMain.on('setup-cancel', () => {
     if (setupWin && !setupWin.isDestroyed()) setupWin.close()
   })
@@ -1090,3 +1585,4 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {})
+app.on('will-quit', () => globalShortcut.unregisterAll())
