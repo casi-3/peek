@@ -42,6 +42,8 @@ let certProcSet = false
 let liveView = null
 let registeredHotkey = null
 let resumeTimer = null
+let overlayRecreateTimer = null
+let overlayRecreates = 0
 const knownCameras = new Set()
 const knownAudioLabels = new Set()
 const activeAudio = new Set()
@@ -53,6 +55,8 @@ const AUDIO_NON_LABELS = new Set(['all', 'dBFS', 'rms', 'transcription', 'set', 
 const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
 const REAUTH_MAX_RETRIES = 3
+const OVERLAY_RECREATE_DELAY_MS = 2000
+const OVERLAY_MAX_RECREATES = 5
 const DEFAULT_LIVE_HOTKEY = 'CommandOrControl+Alt+Z'
 const MIN_SIZE_SCALE = 0.5
 const MAX_SIZE_SCALE = 3
@@ -329,8 +333,32 @@ function createWindow() {
   })
   win.setAlwaysOnTop(true, 'screen-saver')
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  win.webContents.on('did-fail-load', (e, code, description, url, isMainFrame) => {
+    if (!isMainFrame || code === -3) return
+    console.error('[peek] overlay failed to load: ' + description)
+    recreateOverlay()
+  })
+  win.webContents.on('render-process-gone', (e, details) => {
+    console.error('[peek] overlay renderer gone: ' + details.reason)
+    recreateOverlay()
+  })
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'))
   positionWindow()
+}
+
+function recreateOverlay() {
+  if (overlayRecreateTimer || overlayRecreates >= OVERLAY_MAX_RECREATES) return
+  overlayRecreates++
+  overlayRecreateTimer = setTimeout(() => {
+    overlayRecreateTimer = null
+    const old = win
+    win = null
+    liveView = null
+    placementMode = false
+    if (old && !old.isDestroyed()) old.destroy()
+    createWindow()
+    buildMenu()
+  }, OVERLAY_RECREATE_DELAY_MS)
 }
 
 function defaultPrefs() {
