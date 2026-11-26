@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('overlay', {
   streamFailed: () => ipcRenderer.send('overlay-stream-failed'),
   onReauth: (callback) => ipcRenderer.on('frigate-reauthed', () => callback()),
   openUrl: (url) => ipcRenderer.send('overlay-open-url', url),
+  showMenu: () => ipcRenderer.send('overlay-menu'),
+  onMenuClosed: (callback) => ipcRenderer.on('overlay-menu-closed', () => callback()),
   onMode: (callback) => ipcRenderer.on('overlay-mode', (event, mode) => callback(mode)),
   lockPlacement: () => ipcRenderer.send('placement-save'),
   cancelPlacement: () => ipcRenderer.send('placement-cancel'),

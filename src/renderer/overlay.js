@@ -51,6 +51,9 @@ let streamFailed = false
 let posterFailed = false
 let hideTimer = null
 let liveTiles = []
+let menuOpen = false
+let pendingDismiss = 0
+let dismissSeconds = 0
 
 const STREAM_TIMEOUT_MS = 8000
 const MAX_ZOOM = 8
@@ -414,8 +417,22 @@ function showLive(data) {
   requestAnimationFrame(() => card.classList.add('show'))
 }
 
+function scheduleDismiss(seconds) {
+  clearTimeout(dismissTimer)
+  dismissTimer = null
+  if (menuOpen) {
+    pendingDismiss = seconds
+    return
+  }
+  dismissSeconds = seconds
+  dismissTimer = setTimeout(hide, seconds * 1000)
+  startTimerBar(seconds)
+}
+
 function show(event) {
   clearTimeout(dismissTimer)
+  dismissTimer = null
+  pendingDismiss = 0
   clearTimeout(hideTimer)
   hideTimer = null
   if (card.classList.contains('live')) stopLive()
@@ -456,6 +473,8 @@ function show(event) {
 
 function hide() {
   clearTimeout(dismissTimer)
+  dismissTimer = null
+  pendingDismiss = 0
   resetTimerBar()
   clearBoxes()
   activeEvents.clear()
@@ -491,10 +510,7 @@ window.overlay.onEvent((event) => {
       drawBoxes()
     } else {
       clearBoxes()
-      if (event.dismiss > 0) {
-        dismissTimer = setTimeout(hide, event.dismiss * 1000)
-        startTimerBar(event.dismiss)
-      }
+      if (event.dismiss > 0) scheduleDismiss(event.dismiss)
     }
   }
 })
@@ -546,6 +562,28 @@ window.overlay.onReauth(() => {
 closeBtn.addEventListener('click', (e) => {
   e.stopPropagation()
   hide()
+})
+
+card.addEventListener('contextmenu', (e) => {
+  e.preventDefault()
+  if (!placementEl.classList.contains('hidden') || menuOpen) return
+  menuOpen = true
+  if (dismissTimer) {
+    clearTimeout(dismissTimer)
+    dismissTimer = null
+    pendingDismiss = dismissSeconds
+    showTimerBarActive()
+  }
+  window.overlay.showMenu()
+})
+
+window.overlay.onMenuClosed(() => {
+  menuOpen = false
+  const seconds = pendingDismiss
+  pendingDismiss = 0
+  if (seconds > 0 && card.classList.contains('show') && !card.classList.contains('live') && activeEvents.size === 0) {
+    scheduleDismiss(seconds)
+  }
 })
 
 function tileAt(target) {

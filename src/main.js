@@ -22,6 +22,7 @@ let win = null
 let setupWin = null
 let updateWin = null
 let tray = null
+let trayMenu = null
 let config = null
 let prefs = null
 let pendingUpdate = null
@@ -904,6 +905,7 @@ function buildMenu() {
     { label: 'Quit', role: 'quit' }
   ])
 
+  trayMenu = menu
   if (tray) {
     tray.setContextMenu(menu)
     tray.setToolTip(paused ? `Peek (paused until ${pausedUntilText()})` : 'Peek')
@@ -1444,6 +1446,15 @@ app.whenReady().then(() => {
   ipcMain.on('overlay-hide', () => {
     liveView = null
     if (win && !win.isDestroyed()) win.hide()
+  })
+  ipcMain.on('overlay-menu', () => {
+    if (!win || win.isDestroyed()) return
+    const closed = () => { if (win && !win.isDestroyed()) win.webContents.send('overlay-menu-closed') }
+    if (!trayMenu || placementMode) {
+      closed()
+      return
+    }
+    trayMenu.popup({ window: win, callback: closed })
   })
   ipcMain.on('overlay-stream-failed', () => {
     requestReauth()
