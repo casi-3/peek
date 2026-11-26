@@ -42,6 +42,10 @@ let certProcSet = false
 let liveView = null
 let registeredHotkey = null
 let resumeTimer = null
+let frigateConfigLoaded = false
+let configLoading = false
+let configRetryTimer = null
+let configRetryDelay = 0
 const knownCameras = new Set()
 const knownAudioLabels = new Set()
 const activeAudio = new Set()
@@ -53,6 +57,8 @@ const AUDIO_NON_LABELS = new Set(['all', 'dBFS', 'rms', 'transcription', 'set', 
 const REAUTH_MIN_INTERVAL_MS = 10000
 const REAUTH_RETRY_DELAY_MS = 5000
 const REAUTH_MAX_RETRIES = 3
+const CONFIG_RETRY_MIN_MS = 5000
+const CONFIG_RETRY_MAX_MS = 5 * 60 * 1000
 const DEFAULT_LIVE_HOTKEY = 'CommandOrControl+Alt+Z'
 const MIN_SIZE_SCALE = 0.5
 const MAX_SIZE_SCALE = 3
@@ -116,9 +122,31 @@ async function fetchFrigateConfig(token) {
     buildStreamMap(frigateConfig)
     const cameras = (frigateConfig && frigateConfig.cameras) || {}
     Object.keys(cameras).forEach(name => learnCamera(name))
+    frigateConfigLoaded = true
+    clearTimeout(configRetryTimer)
+    configRetryTimer = null
+    configRetryDelay = 0
   } catch (err) {
     console.error('[peek] could not fetch Frigate config: ' + err.message)
+    if (!frigateConfigLoaded) scheduleConfigRetry()
   }
+}
+
+function loadFrigateConfig() {
+  if (configLoading) return
+  configLoading = true
+  initFrigateAuth()
+    .then(() => fetchFrigateConfig(frigateToken))
+    .finally(() => { configLoading = false })
+}
+
+function scheduleConfigRetry() {
+  if (configRetryTimer) return
+  configRetryDelay = Math.min(configRetryDelay ? configRetryDelay * 2 : CONFIG_RETRY_MIN_MS, CONFIG_RETRY_MAX_MS)
+  configRetryTimer = setTimeout(() => {
+    configRetryTimer = null
+    loadFrigateConfig()
+  }, configRetryDelay)
 }
 
 function snapshotUrl(camera) {
@@ -1049,6 +1077,11 @@ function startMqtt() {
     mqttClient.subscribe(`${prefix}/events`)
     mqttClient.subscribe(availableTopic)
     mqttClient.subscribe(`${prefix}/+/audio/+`)
+    if (!frigateConfigLoaded) {
+      clearTimeout(configRetryTimer)
+      configRetryTimer = null
+      loadFrigateConfig()
+    }
   })
   mqttClient.on('message', (topic, payload) => {
     if (topic === availableTopic) {
@@ -1178,7 +1211,7 @@ function startApp() {
   createWindow()
   createTray()
   applyHotkey(prefs.liveHotkey)
-  initFrigateAuth().then(() => fetchFrigateConfig(frigateToken))
+  loadFrigateConfig()
   startMqtt()
 }
 
