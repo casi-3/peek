@@ -141,12 +141,20 @@ function prettyName(camera) {
   return titleCase(camera)
 }
 
+function sameBounds(a, b) {
+  return !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
 function overlayDisplay() {
   const placement = config.placement
-  if (placement && placement.displayId != null) {
-    return screen.getAllDisplays().find(d => d.id === placement.displayId) || screen.getPrimaryDisplay()
-  }
-  return screen.getPrimaryDisplay()
+  if (!placement || placement.displayId == null) return screen.getPrimaryDisplay()
+  const displays = screen.getAllDisplays()
+  const byId = displays.find(d => d.id === placement.displayId)
+  if (byId) return byId
+  const byLabel = placement.displayLabel ? displays.filter(d => d.label === placement.displayLabel) : []
+  if (byLabel.length === 1) return byLabel[0]
+  const byBounds = displays.find(d => sameBounds(d.bounds, placement.displayBounds))
+  return byBounds || byLabel[0] || screen.getPrimaryDisplay()
 }
 
 function sizeScale() {
@@ -282,6 +290,8 @@ function exitPlacement(save) {
     const anchorY = bounds.y + bounds.height / 2 < area.y + area.height / 2 ? 'top' : 'bottom'
     config.placement = {
       displayId: display.id,
+      displayLabel: display.label,
+      displayBounds: display.bounds,
       anchorX,
       anchorY,
       offsetX: anchorX === 'right' ? area.x + area.width - (bounds.x + bounds.width) : bounds.x - area.x,
@@ -294,6 +304,16 @@ function exitPlacement(save) {
   win.webContents.send('overlay-mode', 'event')
   win.hide()
   buildMenu()
+}
+
+function rememberPlacementDisplay() {
+  const placement = config && config.placement
+  if (!placement || placement.displayId == null || placement.displayLabel) return
+  const display = screen.getAllDisplays().find(d => d.id === placement.displayId)
+  if (!display) return
+  placement.displayLabel = display.label
+  placement.displayBounds = display.bounds
+  saveConfig(config)
 }
 
 function resetPlacement() {
@@ -1175,6 +1195,7 @@ function startApp() {
   loadPrefs()
   schedulePauseEnd()
   applyOpenAtLogin(prefs.openAtLogin)
+  rememberPlacementDisplay()
   createWindow()
   createTray()
   applyHotkey(prefs.liveHotkey)
