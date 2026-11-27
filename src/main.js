@@ -305,6 +305,7 @@ function enterPlacement() {
   positionWindow()
   win.setMovable(true)
   win.webContents.send('overlay-mode', 'placement')
+  reassertOnTop()
   win.show()
   win.focus()
 }
@@ -601,7 +602,7 @@ function openLiveView() {
   }
   liveView = { count: cameras.length }
   positionWindow()
-  win.showInactive()
+  showOverlayOnTop()
   win.webContents.send('live-open', {
     muted: cameras.length > 1 || !prefs.sound,
     cameras: cameras.map(camera => ({
@@ -656,6 +657,17 @@ function hotkeyAvailable(accelerator) {
 function revealOverlay() {
   liveView = null
   positionWindow()
+  showOverlayOnTop()
+}
+
+function reassertOnTop() {
+  if (process.platform !== 'win32') return
+  win.setAlwaysOnTop(false)
+  win.setAlwaysOnTop(true, 'screen-saver')
+}
+
+function showOverlayOnTop() {
+  reassertOnTop()
   win.showInactive()
 }
 
