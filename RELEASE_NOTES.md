@@ -1,19 +1,11 @@
-## What's new in v0.7.0
+## What's new in v0.7.1
 
-**Live view on demand**
-- A global keyboard shortcut opens a live camera view whenever you want, without waiting for a detection. One camera opens a single feed, several open a grid. The default is `Ctrl+Alt+Z` (`Cmd+Option+Z` on macOS) and can be changed or cleared in Settings.
+Reliability and quality-of-life fixes.
 
-**Zoom and resize**
-- Scroll over a pop-up or a live view tile to zoom in towards the pointer, up to 8x, and drag to pan. Double-click to reset.
-- Ctrl+scroll resizes the overlay between 0.5x and 3x. Pop-up and live view sizes are saved separately and survive a restart.
+- The overlay stays on its chosen monitor after a reboot, even when Windows renumbers the display.
+- Peek retries loading the Frigate config with a backoff until it succeeds, so starting at login before the network is up no longer leaves camera discovery guessing.
+- The overlay window rebuilds itself if its renderer crashes or fails to load, instead of silently swallowing pop-ups until a restart.
+- Right-click a pop-up or live view to open the tray menu at the pointer. A pop-up's dismiss countdown waits while the menu is open.
+- On Windows with several virtual desktops, the overlay is brought back to the front before each pop-up or live view, so it no longer opens hidden behind another window.
 
-**Zone and object filtering**
-- "Only pop up in zones" limits pop-ups to the zones you pick. Each picked zone can also allow only some objects, such as cars in the driveway but people on the front porch.
-
-**Pause pop-ups**
-- A "Pause pop-ups" menu holds detections back for 30 minutes, 1 hour, 3 hours, 6 hours or the rest of the day. The pause survives a restart and leaves live view working.
-
-**Fixes**
-- Toggling a camera far down a Settings list no longer jumps the list back to the top.
-
-Thanks to @louispires for all of this.
+Thanks to @louispires for all of these.
