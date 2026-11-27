@@ -22,6 +22,7 @@ let win = null
 let setupWin = null
 let updateWin = null
 let tray = null
+let trayMenu = null
 let config = null
 let prefs = null
 let pendingUpdate = null
@@ -44,6 +45,10 @@ let registeredHotkey = null
 let resumeTimer = null
 let overlayRecreateTimer = null
 let overlayRecreates = 0
+let frigateConfigLoaded = false
+let configLoading = false
+let configRetryTimer = null
+let configRetryDelay = 0
 const knownCameras = new Set()
 const knownAudioLabels = new Set()
 const activeAudio = new Set()
@@ -57,6 +62,8 @@ const REAUTH_RETRY_DELAY_MS = 5000
 const REAUTH_MAX_RETRIES = 3
 const OVERLAY_RECREATE_DELAY_MS = 2000
 const OVERLAY_MAX_RECREATES = 5
+const CONFIG_RETRY_MIN_MS = 5000
+const CONFIG_RETRY_MAX_MS = 5 * 60 * 1000
 const DEFAULT_LIVE_HOTKEY = 'CommandOrControl+Alt+Z'
 const MIN_SIZE_SCALE = 0.5
 const MAX_SIZE_SCALE = 3
@@ -120,9 +127,31 @@ async function fetchFrigateConfig(token) {
     buildStreamMap(frigateConfig)
     const cameras = (frigateConfig && frigateConfig.cameras) || {}
     Object.keys(cameras).forEach(name => learnCamera(name))
+    frigateConfigLoaded = true
+    clearTimeout(configRetryTimer)
+    configRetryTimer = null
+    configRetryDelay = 0
   } catch (err) {
     console.error('[peek] could not fetch Frigate config: ' + err.message)
+    if (!frigateConfigLoaded) scheduleConfigRetry()
   }
+}
+
+function loadFrigateConfig() {
+  if (configLoading) return
+  configLoading = true
+  initFrigateAuth()
+    .then(() => fetchFrigateConfig(frigateToken))
+    .finally(() => { configLoading = false })
+}
+
+function scheduleConfigRetry() {
+  if (configRetryTimer) return
+  configRetryDelay = Math.min(configRetryDelay ? configRetryDelay * 2 : CONFIG_RETRY_MIN_MS, CONFIG_RETRY_MAX_MS)
+  configRetryTimer = setTimeout(() => {
+    configRetryTimer = null
+    loadFrigateConfig()
+  }, configRetryDelay)
 }
 
 function snapshotUrl(camera) {
@@ -145,12 +174,20 @@ function prettyName(camera) {
   return titleCase(camera)
 }
 
+function sameBounds(a, b) {
+  return !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
 function overlayDisplay() {
   const placement = config.placement
-  if (placement && placement.displayId != null) {
-    return screen.getAllDisplays().find(d => d.id === placement.displayId) || screen.getPrimaryDisplay()
-  }
-  return screen.getPrimaryDisplay()
+  if (!placement || placement.displayId == null) return screen.getPrimaryDisplay()
+  const displays = screen.getAllDisplays()
+  const byId = displays.find(d => d.id === placement.displayId)
+  if (byId) return byId
+  const byLabel = placement.displayLabel ? displays.filter(d => d.label === placement.displayLabel) : []
+  if (byLabel.length === 1) return byLabel[0]
+  const byBounds = displays.find(d => sameBounds(d.bounds, placement.displayBounds))
+  return byBounds || byLabel[0] || screen.getPrimaryDisplay()
 }
 
 function sizeScale() {
@@ -272,6 +309,7 @@ function enterPlacement() {
   positionWindow()
   win.setMovable(true)
   win.webContents.send('overlay-mode', 'placement')
+  reassertOnTop()
   win.show()
   win.focus()
 }
@@ -286,6 +324,8 @@ function exitPlacement(save) {
     const anchorY = bounds.y + bounds.height / 2 < area.y + area.height / 2 ? 'top' : 'bottom'
     config.placement = {
       displayId: display.id,
+      displayLabel: display.label,
+      displayBounds: display.bounds,
       anchorX,
       anchorY,
       offsetX: anchorX === 'right' ? area.x + area.width - (bounds.x + bounds.width) : bounds.x - area.x,
@@ -298,6 +338,16 @@ function exitPlacement(save) {
   win.webContents.send('overlay-mode', 'event')
   win.hide()
   buildMenu()
+}
+
+function rememberPlacementDisplay() {
+  const placement = config && config.placement
+  if (!placement || placement.displayId == null || placement.displayLabel) return
+  const display = screen.getAllDisplays().find(d => d.id === placement.displayId)
+  if (!display) return
+  placement.displayLabel = display.label
+  placement.displayBounds = display.bounds
+  saveConfig(config)
 }
 
 function resetPlacement() {
@@ -580,7 +630,7 @@ function openLiveView() {
   }
   liveView = { count: cameras.length }
   positionWindow()
-  win.showInactive()
+  showOverlayOnTop()
   win.webContents.send('live-open', {
     muted: cameras.length > 1 || !prefs.sound,
     cameras: cameras.map(camera => ({
@@ -635,6 +685,17 @@ function hotkeyAvailable(accelerator) {
 function revealOverlay() {
   liveView = null
   positionWindow()
+  showOverlayOnTop()
+}
+
+function reassertOnTop() {
+  if (process.platform !== 'win32') return
+  win.setAlwaysOnTop(false)
+  win.setAlwaysOnTop(true, 'screen-saver')
+}
+
+function showOverlayOnTop() {
+  reassertOnTop()
   win.showInactive()
 }
 
@@ -932,6 +993,7 @@ function buildMenu() {
     { label: 'Quit', role: 'quit' }
   ])
 
+  trayMenu = menu
   if (tray) {
     tray.setContextMenu(menu)
     tray.setToolTip(paused ? `Peek (paused until ${pausedUntilText()})` : 'Peek')
@@ -1077,6 +1139,11 @@ function startMqtt() {
     mqttClient.subscribe(`${prefix}/events`)
     mqttClient.subscribe(availableTopic)
     mqttClient.subscribe(`${prefix}/+/audio/+`)
+    if (!frigateConfigLoaded) {
+      clearTimeout(configRetryTimer)
+      configRetryTimer = null
+      loadFrigateConfig()
+    }
   })
   mqttClient.on('message', (topic, payload) => {
     if (topic === availableTopic) {
@@ -1203,10 +1270,11 @@ function startApp() {
   loadPrefs()
   schedulePauseEnd()
   applyOpenAtLogin(prefs.openAtLogin)
+  rememberPlacementDisplay()
   createWindow()
   createTray()
   applyHotkey(prefs.liveHotkey)
-  initFrigateAuth().then(() => fetchFrigateConfig(frigateToken))
+  loadFrigateConfig()
   startMqtt()
 }
 
@@ -1472,6 +1540,15 @@ app.whenReady().then(() => {
   ipcMain.on('overlay-hide', () => {
     liveView = null
     if (win && !win.isDestroyed()) win.hide()
+  })
+  ipcMain.on('overlay-menu', () => {
+    if (!win || win.isDestroyed()) return
+    const closed = () => { if (win && !win.isDestroyed()) win.webContents.send('overlay-menu-closed') }
+    if (!trayMenu || placementMode) {
+      closed()
+      return
+    }
+    trayMenu.popup({ window: win, callback: closed })
   })
   ipcMain.on('overlay-stream-failed', () => {
     requestReauth()

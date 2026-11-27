@@ -26,7 +26,7 @@
 - Also pops up for Frigate audio detections (crying, yelling, and the like), not just tracked objects
 - Shows the detected object, score, recognized face, license plate, and entered zones
 - Optional instant snapshot so there is no black frame while the live feed connects
-- Menu bar app: pick which cameras notify, toggle sound, set the dismiss delay
+- Menu bar app, with the same menu a right-click away on the pop-up or live view: pick which cameras notify, toggle sound, set the dismiss delay
 - Pause pop-ups for 30 minutes, 1, 3 or 6 hours, or the rest of the day
 - Global keyboard shortcut (default `Ctrl+Alt+Z`) opens a live view of one camera or a grid of several, on demand
 - Frameless, always-on-top, translucent card that slides in and out
